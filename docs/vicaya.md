@@ -661,9 +661,11 @@ ci: fmt lint test build
 
 #### Git Hooks (pre-push)
 
-Use native git hooks for quality enforcement before pushes:
+**Automatic Rust-native hook installation** via build script:
 
-**Pre-push hook** (`.cargo-husky/hooks/pre-push`):
+The pre-push hook is automatically installed when developers run `cargo build` for the first time. No manual setup required!
+
+**Hook script** (`.cargo-husky/hooks/pre-push`):
 ```bash
 #!/bin/sh
 set -e
@@ -674,14 +676,13 @@ make test
 echo "✅ All pre-push checks passed!"
 ```
 
-**Installation:**
-```bash
-# One-time setup per developer
-cp .cargo-husky/hooks/pre-push .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
-```
+**How it works:**
+- `crates/vicaya-core/build.rs` automatically copies the hook to `.git/hooks/pre-push`
+- Sets executable permissions on Unix systems
+- Runs on every `cargo build` but only updates if changed
+- Developers get the hook automatically - zero manual configuration
 
-The hook runs automatically before every `git push`, ensuring code is formatted, linted, and tested.
+The hook runs before every `git push`, ensuring code is formatted, linted, and tested.
 
 #### GitHub Actions Workflow
 
