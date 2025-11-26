@@ -1,7 +1,7 @@
 //! Configuration management for vicaya.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Main configuration structure for vicaya.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +74,7 @@ impl Config {
         self.index_roots = self
             .index_roots
             .iter()
-            .map(Self::expand_path)
+            .map(|p| Self::expand_path(p.as_ref()))
             .collect();
 
         // Expand in index_path
@@ -82,13 +82,13 @@ impl Config {
     }
 
     /// Expand tilde and environment variables in a single path.
-    fn expand_path(path: &PathBuf) -> PathBuf {
+    fn expand_path(path: &Path) -> PathBuf {
         let path_str = path.to_string_lossy();
 
         // Use shellexpand to handle ~, ~user, and $VAR expansion
         match shellexpand::full(&path_str) {
             Ok(expanded) => PathBuf::from(expanded.as_ref()),
-            Err(_) => path.clone(), // Fallback to original path on error
+            Err(_) => path.to_path_buf(), // Fallback to original path on error
         }
     }
 
@@ -113,5 +113,120 @@ impl Config {
     pub fn ensure_index_dir(&self) -> crate::Result<()> {
         std::fs::create_dir_all(&self.index_path)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_expand_path_with_tilde() {
+        let home = env::var("HOME").unwrap();
+        let path = Path::new("~/test/path");
+        let expanded = Config::expand_path(path);
+
+        assert_eq!(expanded, PathBuf::from(format!("{}/test/path", home)));
+    }
+
+    #[test]
+    fn test_expand_path_with_env_var() {
+        env::set_var("TEST_VAR", "/test/location");
+        let path = Path::new("$TEST_VAR/subdir");
+        let expanded = Config::expand_path(path);
+
+        assert_eq!(expanded, PathBuf::from("/test/location/subdir"));
+        env::remove_var("TEST_VAR");
+    }
+
+    #[test]
+    fn test_expand_path_absolute() {
+        let path = Path::new("/absolute/path");
+        let expanded = Config::expand_path(path);
+
+        assert_eq!(expanded, PathBuf::from("/absolute/path"));
+    }
+
+    #[test]
+    fn test_expand_path_relative() {
+        let path = Path::new("relative/path");
+        let expanded = Config::expand_path(path);
+
+        assert_eq!(expanded, PathBuf::from("relative/path"));
+    }
+
+    #[test]
+    fn test_expand_paths_in_config() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let home = env::var("HOME").unwrap();
+
+        let config_content = r#"
+index_roots = ["~/Documents", "$HOME/Projects"]
+exclusions = [".git", "node_modules"]
+index_path = "~/Library/Application Support/vicaya"
+max_memory_mb = 512
+
+[performance]
+scanner_threads = 4
+reconcile_hour = 3
+"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(config_content.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+
+        // Verify tilde expansion in index_roots
+        assert_eq!(config.index_roots[0], PathBuf::from(format!("{}/Documents", home)));
+        assert_eq!(config.index_roots[1], PathBuf::from(format!("{}/Projects", home)));
+
+        // Verify tilde expansion in index_path
+        assert_eq!(config.index_path, PathBuf::from(format!("{}/Library/Application Support/vicaya", home)));
+    }
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+
+        assert!(!config.index_roots.is_empty());
+        assert!(!config.exclusions.is_empty());
+        assert_eq!(config.max_memory_mb, 512);
+        assert_eq!(config.performance.reconcile_hour, 3);
+    }
+
+    #[test]
+    fn test_config_save_and_load() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("test_config.toml");
+
+        let config = Config {
+            index_roots: vec![PathBuf::from("/test/root")],
+            exclusions: vec![".git".to_string(), "target".to_string()],
+            index_path: PathBuf::from("/test/index"),
+            max_memory_mb: 256,
+            performance: PerformanceConfig {
+                scanner_threads: 8,
+                reconcile_hour: 2,
+            },
+        };
+
+        // Save
+        config.save(&config_path).unwrap();
+
+        // Load
+        let loaded_config = Config::load(&config_path).unwrap();
+
+        assert_eq!(loaded_config.index_roots, config.index_roots);
+        assert_eq!(loaded_config.exclusions, config.exclusions);
+        assert_eq!(loaded_config.index_path, config.index_path);
+        assert_eq!(loaded_config.max_memory_mb, config.max_memory_mb);
+        assert_eq!(loaded_config.performance.scanner_threads, config.performance.scanner_threads);
+        assert_eq!(loaded_config.performance.reconcile_hour, config.performance.reconcile_hour);
     }
 }
