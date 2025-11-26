@@ -1,9 +1,13 @@
 //! vicaya-daemon: Background service for vicaya.
 
+mod ipc_server;
+
 use std::path::PathBuf;
 use tracing::info;
 use vicaya_core::{Config, Result};
 use vicaya_scanner::{IndexSnapshot, Scanner};
+
+use crate::ipc_server::IpcServer;
 
 fn main() -> Result<()> {
     vicaya_core::logging::init();
@@ -30,14 +34,17 @@ fn main() -> Result<()> {
     info!("Index ready: {} files indexed", snapshot.file_table.len());
 
     // TODO: Start watcher
-    // TODO: Start IPC server
+
+    // Start IPC server
+    let socket_path = vicaya_core::ipc::socket_path();
+    let server = IpcServer::new(&socket_path, snapshot)?;
 
     info!("vicaya daemon running. Press Ctrl+C to stop.");
 
-    // Keep the daemon running
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+    // Run the IPC server
+    server.run()?;
+
+    Ok(())
 }
 
 fn load_config() -> Result<Config> {
