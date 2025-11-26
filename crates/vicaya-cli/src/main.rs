@@ -1,10 +1,15 @@
 //! vicaya-cli: Command-line interface for vicaya.
 
+mod ipc_client;
+
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
+use vicaya_core::ipc::{Request, Response};
 use vicaya_core::{Config, Result};
-use vicaya_scanner::{IndexSnapshot, Scanner};
+use vicaya_scanner::Scanner;
+
+use crate::ipc_client::IpcClient;
 
 #[derive(Parser)]
 #[command(name = "vicaya")]
@@ -71,56 +76,54 @@ fn main() -> Result<()> {
 }
 
 fn search(query: &str, limit: usize, format: &str) -> Result<()> {
-    let config = load_config()?;
-    let index_file = config.index_path.join("index.bin");
+    let mut client = IpcClient::connect()?;
 
-    if !index_file.exists() {
-        eprintln!("Error: Index not found. Run 'vicaya rebuild' first.");
-        return Ok(());
-    }
-
-    let snapshot = IndexSnapshot::load(&index_file)?;
-    let engine = vicaya_index::QueryEngine::new(
-        &snapshot.file_table,
-        &snapshot.string_arena,
-        &snapshot.trigram_index,
-    );
-
-    let query_obj = vicaya_index::Query {
-        term: query.to_string(),
+    let request = Request::Search {
+        query: query.to_string(),
         limit,
     };
 
-    let results = engine.search(&query_obj);
+    let response = client.request(&request)?;
 
-    match format {
-        "json" => {
-            println!("{}", serde_json::to_string_pretty(&results).unwrap());
-        }
-        "plain" => {
-            for result in results {
-                println!("{}", result.path);
+    match response {
+        Response::SearchResults { results } => {
+            match format {
+                "json" => {
+                    println!("{}", serde_json::to_string_pretty(&results).unwrap());
+                }
+                "plain" => {
+                    for result in results {
+                        println!("{}", result.path);
+                    }
+                }
+                _ => {
+                    // Table format
+                    println!("{:<6} {:<6} {:<20} PATH", "RANK", "SCORE", "MODIFIED");
+                    for (i, result) in results.iter().enumerate() {
+                        let mtime = chrono::DateTime::from_timestamp(result.mtime, 0)
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_default();
+                        println!(
+                            "{:<6} {:<6.2} {:<20} {}",
+                            i + 1,
+                            result.score,
+                            mtime,
+                            result.path
+                        );
+                    }
+                }
             }
+            Ok(())
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            Ok(())
         }
         _ => {
-            // Table format
-            println!("{:<6} {:<6} {:<20} PATH", "RANK", "SCORE", "MODIFIED");
-            for (i, result) in results.iter().enumerate() {
-                let mtime = chrono::DateTime::from_timestamp(result.mtime, 0)
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                    .unwrap_or_default();
-                println!(
-                    "{:<6} {:<6.2} {:<20} {}",
-                    i + 1,
-                    result.score,
-                    mtime,
-                    result.path
-                );
-            }
+            eprintln!("Unexpected response from daemon");
+            Ok(())
         }
     }
-
-    Ok(())
 }
 
 fn rebuild(dry_run: bool) -> Result<()> {
@@ -144,40 +147,41 @@ fn rebuild(dry_run: bool) -> Result<()> {
 }
 
 fn status() -> Result<()> {
-    let config = load_config()?;
-    let index_file = config.index_path.join("index.bin");
+    let mut client = IpcClient::connect()?;
 
-    if !index_file.exists() {
-        println!("Status: No index found");
-        println!("Run 'vicaya rebuild' to create an index");
-        return Ok(());
+    let request = Request::Status;
+    let response = client.request(&request)?;
+
+    match response {
+        Response::Status {
+            indexed_files,
+            trigram_count,
+            arena_size,
+            last_updated,
+        } => {
+            println!("Daemon Status:");
+            println!("  Files indexed: {}", indexed_files);
+            println!("  Trigrams: {}", trigram_count);
+            println!("  String arena size: {} bytes", arena_size);
+            if last_updated > 0 {
+                println!(
+                    "  Last updated: {}",
+                    chrono::DateTime::from_timestamp(last_updated, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+        Response::Error { message } => {
+            eprintln!("Error: {}", message);
+            Ok(())
+        }
+        _ => {
+            eprintln!("Unexpected response from daemon");
+            Ok(())
+        }
     }
-
-    let snapshot = IndexSnapshot::load(&index_file)?;
-    let metadata = std::fs::metadata(&index_file)?;
-
-    println!("Index Status:");
-    println!("  Files indexed: {}", snapshot.file_table.len());
-    println!("  Trigrams: {}", snapshot.trigram_index.trigram_count());
-    println!(
-        "  String arena size: {} bytes",
-        snapshot.string_arena.size()
-    );
-    println!(
-        "  Last modified: {}",
-        chrono::DateTime::from_timestamp(
-            metadata
-                .modified()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64,
-            0
-        )
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_default()
-    );
-
-    Ok(())
 }
 
 fn load_config() -> Result<Config> {
