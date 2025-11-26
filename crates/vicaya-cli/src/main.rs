@@ -243,7 +243,7 @@ fn init_config(force: bool) -> Result<()> {
 # Directories to index
 # Add or remove paths as needed
 index_roots = [
-    "{}",
+    "~/",
 ]
 
 # Directories and patterns to exclude from indexing
@@ -337,7 +337,6 @@ scanner_threads = {}
 # Hour of day (0-23) to run automatic reconciliation
 reconcile_hour = 3
 "#,
-        home,
         index_dir.display(),
         num_cpus::get().max(2)
     );
@@ -351,7 +350,7 @@ reconcile_hour = 3
     println!("Index location: {}", index_dir.display());
     println!();
     println!("📝 What's indexed:");
-    println!("  • Your home directory: {}", home);
+    println!("  • Your home directory: ~/");
     println!();
     println!("📝 What's excluded (60+ patterns):");
     println!("  • Version control: .git, .svn, .hg");
