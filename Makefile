@@ -3,12 +3,12 @@
 .DEFAULT_GOAL := help
 
 help: ## Show this help message
-	@echo "vicaya - विचय (macOS filesystem search tool)"
+	@echo "\033[1;36mvicaya - विचय\033[0m \033[2m(macOS filesystem search tool)\033[0m"
 	@echo ""
-	@echo "Usage: make [target]"
+	@echo "\033[1mUsage:\033[0m make \033[33m[target]\033[0m"
 	@echo ""
-	@echo "Available targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+	@echo "\033[1mAvailable targets:\033[0m"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[32m%-12s\033[0m %s\n", $$1, $$2}'
 
 all: ci ## Run full CI pipeline (fmt + lint + test + build)
 
