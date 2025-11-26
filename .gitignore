@@ -22,3 +22,6 @@ Cargo.lock
 
 # Test artifacts
 /tests/fixtures/generated/
+
+# Benchmark tools
+hyperfine*
