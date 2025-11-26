@@ -127,7 +127,7 @@ mod tests {
         let path = Path::new("~/test/path");
         let expanded = Config::expand_path(path);
 
-        assert_eq!(expanded, PathBuf::from(format!("{}/test/path", home)));
+        assert_eq!(expanded, PathBuf::from(format!("{home}/test/path")));
     }
 
     #[test]
@@ -183,17 +183,17 @@ reconcile_hour = 3
         // Verify tilde expansion in index_roots
         assert_eq!(
             config.index_roots[0],
-            PathBuf::from(format!("{}/Documents", home))
+            PathBuf::from(format!("{home}/Documents"))
         );
         assert_eq!(
             config.index_roots[1],
-            PathBuf::from(format!("{}/Projects", home))
+            PathBuf::from(format!("{home}/Projects"))
         );
 
         // Verify tilde expansion in index_path
         assert_eq!(
             config.index_path,
-            PathBuf::from(format!("{}/Library/Application Support/vicaya", home))
+            PathBuf::from(format!("{home}/Library/Application Support/vicaya"))
         );
     }
 
