@@ -18,7 +18,7 @@ pub fn init() {
 
 /// Initialize logging with a custom log level.
 pub fn init_with_level(level: &str) {
-    let filter = EnvFilter::new(format!("vicaya={}", level));
+    let filter = EnvFilter::new(format!("vicaya={level}"));
 
     tracing_subscriber::registry()
         .with(filter)
