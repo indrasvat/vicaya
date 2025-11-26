@@ -181,11 +181,20 @@ reconcile_hour = 3
         let config = Config::load(temp_file.path()).unwrap();
 
         // Verify tilde expansion in index_roots
-        assert_eq!(config.index_roots[0], PathBuf::from(format!("{}/Documents", home)));
-        assert_eq!(config.index_roots[1], PathBuf::from(format!("{}/Projects", home)));
+        assert_eq!(
+            config.index_roots[0],
+            PathBuf::from(format!("{}/Documents", home))
+        );
+        assert_eq!(
+            config.index_roots[1],
+            PathBuf::from(format!("{}/Projects", home))
+        );
 
         // Verify tilde expansion in index_path
-        assert_eq!(config.index_path, PathBuf::from(format!("{}/Library/Application Support/vicaya", home)));
+        assert_eq!(
+            config.index_path,
+            PathBuf::from(format!("{}/Library/Application Support/vicaya", home))
+        );
     }
 
     #[test]
@@ -226,7 +235,13 @@ reconcile_hour = 3
         assert_eq!(loaded_config.exclusions, config.exclusions);
         assert_eq!(loaded_config.index_path, config.index_path);
         assert_eq!(loaded_config.max_memory_mb, config.max_memory_mb);
-        assert_eq!(loaded_config.performance.scanner_threads, config.performance.scanner_threads);
-        assert_eq!(loaded_config.performance.reconcile_hour, config.performance.reconcile_hour);
+        assert_eq!(
+            loaded_config.performance.scanner_threads,
+            config.performance.scanner_threads
+        );
+        assert_eq!(
+            loaded_config.performance.reconcile_hour,
+            config.performance.reconcile_hour
+        );
     }
 }
