@@ -82,3 +82,117 @@ impl Default for FileTable {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_meta(path_offset: usize, name_offset: usize) -> FileMeta {
+        FileMeta {
+            path_offset,
+            path_len: 10,
+            name_offset,
+            name_len: 5,
+            size: 1024,
+            mtime: 1234567890,
+            dev: 1,
+            ino: 100,
+        }
+    }
+
+    #[test]
+    fn test_new_table_is_empty() {
+        let table = FileTable::new();
+        assert!(table.is_empty());
+        assert_eq!(table.len(), 0);
+    }
+
+    #[test]
+    fn test_insert_and_get() {
+        let mut table = FileTable::new();
+        let meta = create_test_meta(0, 10);
+
+        let id = table.insert(meta);
+        assert_eq!(id, FileId(0));
+        assert_eq!(table.len(), 1);
+        assert!(!table.is_empty());
+
+        let retrieved = table.get(id).unwrap();
+        assert_eq!(retrieved.path_offset, 0);
+        assert_eq!(retrieved.name_offset, 10);
+        assert_eq!(retrieved.size, 1024);
+    }
+
+    #[test]
+    fn test_multiple_inserts() {
+        let mut table = FileTable::new();
+
+        let id1 = table.insert(create_test_meta(0, 10));
+        let id2 = table.insert(create_test_meta(20, 30));
+        let id3 = table.insert(create_test_meta(40, 50));
+
+        assert_eq!(id1, FileId(0));
+        assert_eq!(id2, FileId(1));
+        assert_eq!(id3, FileId(2));
+        assert_eq!(table.len(), 3);
+
+        assert_eq!(table.get(id1).unwrap().path_offset, 0);
+        assert_eq!(table.get(id2).unwrap().path_offset, 20);
+        assert_eq!(table.get(id3).unwrap().path_offset, 40);
+    }
+
+    #[test]
+    fn test_get_invalid_id() {
+        let table = FileTable::new();
+        assert!(table.get(FileId(0)).is_none());
+        assert!(table.get(FileId(999)).is_none());
+    }
+
+    #[test]
+    fn test_get_mut() {
+        let mut table = FileTable::new();
+        let id = table.insert(create_test_meta(0, 10));
+
+        {
+            let meta = table.get_mut(id).unwrap();
+            meta.size = 2048;
+        }
+
+        assert_eq!(table.get(id).unwrap().size, 2048);
+    }
+
+    #[test]
+    fn test_iter() {
+        let mut table = FileTable::new();
+        table.insert(create_test_meta(0, 10));
+        table.insert(create_test_meta(20, 30));
+        table.insert(create_test_meta(40, 50));
+
+        let entries: Vec<_> = table.iter().collect();
+        assert_eq!(entries.len(), 3);
+
+        assert_eq!(entries[0].0, FileId(0));
+        assert_eq!(entries[1].0, FileId(1));
+        assert_eq!(entries[2].0, FileId(2));
+
+        assert_eq!(entries[0].1.path_offset, 0);
+        assert_eq!(entries[1].1.path_offset, 20);
+        assert_eq!(entries[2].1.path_offset, 40);
+    }
+
+    #[test]
+    fn test_default() {
+        let table = FileTable::default();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn test_file_id_equality() {
+        let id1 = FileId(42);
+        let id2 = FileId(42);
+        let id3 = FileId(100);
+
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
+}
