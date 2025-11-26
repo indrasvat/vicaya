@@ -104,28 +104,31 @@ impl<'a> QueryEngine<'a> {
 
     /// Calculate match score (0.0 to 1.0).
     fn calculate_score(&self, name: &str, _path: &str, query: &str) -> f32 {
-        // Prefix match gets highest score
-        if name.starts_with(query) {
+        // Exact match of entire basename (highest score)
+        if name == query {
             return 1.0;
         }
 
-        // Exact match of basename
-        if name == query {
-            return 0.95;
+        // Check for prefix match
+        if name.starts_with(query) {
+            // Prefer shorter suffixes - use ratio of query length to total length
+            // This makes "main.rs" score higher than "main_test.rs"
+            let ratio = query.len() as f32 / name.len() as f32;
+            return 0.9 + (ratio * 0.09); // Range: 0.9 to 0.99
         }
 
-        // Contains as whole word
+        // Contains as whole word (after underscore or space)
         if name.contains(&format!(" {}", query)) || name.contains(&format!("_{}", query)) {
-            return 0.8;
+            return 0.7;
         }
 
         // Contains as substring
         if name.contains(query) {
-            return 0.6;
+            return 0.5;
         }
 
         // Default score for trigram matches
-        0.5
+        0.3
     }
 
     /// Linear search for short queries.
