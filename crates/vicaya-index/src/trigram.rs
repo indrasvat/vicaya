@@ -5,7 +5,7 @@ use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// A trigram: 3 consecutive characters encoded as a u32.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Trigram(pub u32);
 
 impl Trigram {
@@ -46,7 +46,12 @@ impl TrigramIndex {
     /// Add a file to the index with its trigrams.
     pub fn add(&mut self, file_id: FileId, text: &str) {
         let trigrams = Trigram::extract(text);
-        for trigram in trigrams {
+        // Deduplicate trigrams to avoid adding the same file multiple times
+        let mut unique_trigrams: Vec<Trigram> = trigrams;
+        unique_trigrams.sort_unstable();
+        unique_trigrams.dedup();
+
+        for trigram in unique_trigrams {
             self.index.entry(trigram).or_default().push(file_id);
         }
     }
