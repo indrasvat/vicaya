@@ -62,37 +62,33 @@ impl Config {
         let mut config: Self =
             toml::from_str(&content).map_err(|e| crate::Error::Config(e.to_string()))?;
 
-        // Expand tilde (~) in paths
-        config.expand_tilde_in_paths();
+        // Expand tilde (~) and environment variables in paths using shellexpand
+        config.expand_paths();
 
         Ok(config)
     }
 
-    /// Expand tilde (~) in all path fields.
-    fn expand_tilde_in_paths(&mut self) {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-
+    /// Expand tilde (~) and environment variables in all path fields.
+    fn expand_paths(&mut self) {
         // Expand in index_roots
         self.index_roots = self
             .index_roots
             .iter()
-            .map(|p| Self::expand_tilde(p, &home))
+            .map(Self::expand_path)
             .collect();
 
         // Expand in index_path
-        self.index_path = Self::expand_tilde(&self.index_path, &home);
+        self.index_path = Self::expand_path(&self.index_path);
     }
 
-    /// Expand tilde in a single path.
-    fn expand_tilde(path: &PathBuf, home: &str) -> PathBuf {
+    /// Expand tilde and environment variables in a single path.
+    fn expand_path(path: &PathBuf) -> PathBuf {
         let path_str = path.to_string_lossy();
 
-        if path_str == "~" {
-            PathBuf::from(home)
-        } else if path_str.starts_with("~/") {
-            PathBuf::from(home).join(&path_str[2..])
-        } else {
-            path.clone()
+        // Use shellexpand to handle ~, ~user, and $VAR expansion
+        match shellexpand::full(&path_str) {
+            Ok(expanded) => PathBuf::from(expanded.as_ref()),
+            Err(_) => path.clone(), // Fallback to original path on error
         }
     }
 
