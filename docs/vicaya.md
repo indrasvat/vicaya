@@ -661,20 +661,27 @@ ci: fmt lint test build
 
 #### Git Hooks (pre-push)
 
-Use `lefthook` or simple `git` hooks:
+Use native git hooks for quality enforcement before pushes:
 
-```yaml
-# .lefthook.yml
-pre-push:
-  parallel: false
-  commands:
-    fmt:
-      run: make fmt
-    lint:
-      run: make lint
-    test:
-      run: make test
+**Pre-push hook** (`.cargo-husky/hooks/pre-push`):
+```bash
+#!/bin/sh
+set -e
+echo "Running pre-push checks..."
+make fmt
+make lint
+make test
+echo "✅ All pre-push checks passed!"
 ```
+
+**Installation:**
+```bash
+# One-time setup per developer
+cp .cargo-husky/hooks/pre-push .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+The hook runs automatically before every `git push`, ensuring code is formatted, linted, and tested.
 
 #### GitHub Actions Workflow
 
