@@ -1,0 +1,23 @@
+[package]
+name = "vicaya-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "vicaya"
+path = "src/main.rs"
+
+[dependencies]
+vicaya-core = { path = "../vicaya-core" }
+vicaya-index = { path = "../vicaya-index" }
+vicaya-scanner = { path = "../vicaya-scanner" }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }

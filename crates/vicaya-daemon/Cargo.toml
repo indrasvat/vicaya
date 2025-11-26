@@ -1,0 +1,18 @@
+[package]
+name = "vicaya-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vicaya-core = { path = "../vicaya-core" }
+vicaya-index = { path = "../vicaya-index" }
+vicaya-scanner = { path = "../vicaya-scanner" }
+vicaya-watcher = { path = "../vicaya-watcher" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
