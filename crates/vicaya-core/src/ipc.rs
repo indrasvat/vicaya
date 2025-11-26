@@ -94,7 +94,9 @@ mod tests {
         };
         let json = search.to_json().unwrap();
         let decoded: Request = Request::from_json(&json).unwrap();
-        assert!(matches!(decoded, Request::Search { query, limit } if query == "test" && limit == 10));
+        assert!(
+            matches!(decoded, Request::Search { query, limit } if query == "test" && limit == 10)
+        );
 
         // Test Status request
         let status = Request::Status;
@@ -140,7 +142,13 @@ mod tests {
         };
         let json = status.to_json().unwrap();
         let decoded = Response::from_json(&json).unwrap();
-        assert!(matches!(decoded, Response::Status { indexed_files: 100, .. }));
+        assert!(matches!(
+            decoded,
+            Response::Status {
+                indexed_files: 100,
+                ..
+            }
+        ));
 
         // Test Ok response
         let ok = Response::Ok;
