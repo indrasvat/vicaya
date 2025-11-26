@@ -1,18 +1,8 @@
 #!/bin/sh
 # Pre-push hook for vicaya
-# Runs format, lint, and tests before allowing push
+# Runs full CI pipeline (fmt + lint + test + build) before allowing push
 
 set -e
 
-echo "Running pre-push checks..."
-
-echo "→ Formatting code..."
-make fmt
-
-echo "→ Running linter..."
-make lint
-
-echo "→ Running tests..."
-make test
-
-echo "✅ All pre-push checks passed!"
+echo "Running pre-push CI checks..."
+make ci
