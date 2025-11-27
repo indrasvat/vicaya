@@ -326,7 +326,7 @@ exclusions = [
 ]
 
 # Where to store the index file
-index_path = "{}"
+index_path = "~/Library/Application Support/vicaya/index"
 
 # Maximum memory to use for indexing (in MB)
 max_memory_mb = 512
@@ -337,7 +337,6 @@ scanner_threads = {}
 # Hour of day (0-23) to run automatic reconciliation
 reconcile_hour = 3
 "#,
-        index_dir.display(),
         num_cpus::get().max(2)
     );
 
