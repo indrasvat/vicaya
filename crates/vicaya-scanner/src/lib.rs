@@ -77,11 +77,29 @@ impl Scanner {
 
     /// Check if a path should be indexed.
     fn should_index(&self, path: &Path) -> bool {
-        let path_str = path.to_string_lossy();
-
         for exclusion in &self.config.exclusions {
-            if path_str.contains(exclusion.as_str()) {
-                return false;
+            // Check if any path component matches the exclusion pattern
+            for component in path.components() {
+                let component_str = component.as_os_str().to_string_lossy();
+
+                // Support glob patterns
+                if exclusion.contains('*') {
+                    // Simple glob matching: *.ext or prefix*
+                    if let Some(ext) = exclusion.strip_prefix("*.") {
+                        if component_str.ends_with(&format!(".{}", ext)) {
+                            return false;
+                        }
+                    } else if let Some(prefix) = exclusion.strip_suffix('*') {
+                        if component_str.starts_with(prefix) {
+                            return false;
+                        }
+                    }
+                } else {
+                    // Exact component match
+                    if component_str == exclusion.as_str() {
+                        return false;
+                    }
+                }
             }
         }
 
