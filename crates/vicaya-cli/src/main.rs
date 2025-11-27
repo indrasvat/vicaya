@@ -52,6 +52,22 @@ enum Commands {
 
     /// Show index status
     Status,
+
+    /// Manage the daemon
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Start the daemon
+    Start,
+    /// Stop the daemon
+    Stop,
+    /// Check daemon status
+    Status,
 }
 
 fn main() -> Result<()> {
@@ -76,6 +92,9 @@ fn main() -> Result<()> {
         Some(Commands::Status) => {
             status()?;
         }
+        Some(Commands::Daemon { action }) => {
+            daemon_command(action)?;
+        }
         None => {
             println!("vicaya v{}", env!("CARGO_PKG_VERSION"));
             println!("Use --help for usage information");
@@ -86,6 +105,16 @@ fn main() -> Result<()> {
 }
 
 fn search(query: &str, limit: usize, format: &str) -> Result<()> {
+    // Auto-start daemon if not running
+    if !vicaya_core::daemon::is_running() {
+        println!("Daemon is not running. Starting daemon...");
+        let pid = vicaya_core::daemon::start_daemon()?;
+        println!("✓ Daemon started (PID: {})", pid);
+
+        // Wait a moment for daemon to initialize
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
     let mut client = IpcClient::connect()?;
 
     let request = Request::Search {
@@ -189,6 +218,91 @@ fn status() -> Result<()> {
         }
         _ => {
             eprintln!("Unexpected response from daemon");
+            Ok(())
+        }
+    }
+}
+
+fn daemon_command(action: DaemonAction) -> Result<()> {
+    match action {
+        DaemonAction::Start => {
+            println!("Starting vicaya daemon...");
+
+            if vicaya_core::daemon::is_running() {
+                println!("✓ Daemon is already running");
+                return Ok(());
+            }
+
+            match vicaya_core::daemon::start_daemon() {
+                Ok(pid) => {
+                    println!("✓ Daemon started successfully (PID: {})", pid);
+                    println!("  Socket: {}", vicaya_core::ipc::socket_path().display());
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("✗ Failed to start daemon: {}", e);
+                    Err(e)
+                }
+            }
+        }
+        DaemonAction::Stop => {
+            println!("Stopping vicaya daemon...");
+
+            if !vicaya_core::daemon::is_running() {
+                println!("Daemon is not running");
+                return Ok(());
+            }
+
+            match vicaya_core::daemon::stop_daemon() {
+                Ok(_) => {
+                    println!("✓ Daemon stopped successfully");
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("✗ Failed to stop daemon: {}", e);
+                    Err(e)
+                }
+            }
+        }
+        DaemonAction::Status => {
+            if vicaya_core::daemon::is_running() {
+                let pid = vicaya_core::daemon::get_pid().unwrap_or(0);
+                println!("✓ Daemon is running (PID: {})", pid);
+                println!("  Socket: {}", vicaya_core::ipc::socket_path().display());
+                println!(
+                    "  PID file: {}",
+                    vicaya_core::daemon::pid_file_path().display()
+                );
+
+                // Try to get detailed status from daemon
+                if let Ok(mut client) = IpcClient::connect() {
+                    let request = Request::Status;
+                    if let Ok(Response::Status {
+                        indexed_files,
+                        trigram_count,
+                        arena_size,
+                        last_updated,
+                    }) = client.request(&request)
+                    {
+                        println!("\nIndex Status:");
+                        println!("  Files indexed: {}", indexed_files);
+                        println!("  Trigrams: {}", trigram_count);
+                        println!("  Arena size: {} bytes", arena_size);
+                        if last_updated > 0 {
+                            println!(
+                                "  Last updated: {}",
+                                chrono::DateTime::from_timestamp(last_updated, 0)
+                                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .unwrap_or_default()
+                            );
+                        }
+                    }
+                }
+            } else {
+                println!("✗ Daemon is not running");
+                println!("\nTo start the daemon, run:");
+                println!("  vicaya daemon start");
+            }
             Ok(())
         }
     }
