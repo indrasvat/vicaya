@@ -80,6 +80,11 @@ impl Scanner {
         for exclusion in &self.config.exclusions {
             // Check if any path component matches the exclusion pattern
             for component in path.components() {
+                // Skip root directory component
+                if matches!(component, std::path::Component::RootDir) {
+                    continue;
+                }
+
                 let component_str = component.as_os_str().to_string_lossy();
 
                 // Support glob patterns
@@ -90,7 +95,8 @@ impl Scanner {
                             return false;
                         }
                     } else if let Some(prefix) = exclusion.strip_suffix('*') {
-                        if component_str.starts_with(prefix) {
+                        // Ignore empty prefix (bare "*" pattern)
+                        if !prefix.is_empty() && component_str.starts_with(prefix) {
                             return false;
                         }
                     }
@@ -199,5 +205,173 @@ impl IndexSnapshot {
             string_arena,
             trigram_index,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vicaya_core::Config;
+
+    fn make_scanner(exclusions: Vec<String>) -> Scanner {
+        let config = Config {
+            exclusions,
+            ..Default::default()
+        };
+        Scanner::new(config)
+    }
+
+    #[test]
+    fn test_should_index_substring_not_excluded() {
+        // REGRESSION TEST: "bin" should NOT match "robinsharma" (substring)
+        let scanner = make_scanner(vec!["bin".to_string()]);
+
+        assert!(scanner.should_index(Path::new("/Users/robinsharma/Documents/file.txt")));
+        assert!(scanner.should_index(Path::new("/home/robin/test.txt")));
+        assert!(scanner.should_index(Path::new("/combined/path/file.txt")));
+    }
+
+    #[test]
+    fn test_should_index_exact_component_excluded() {
+        // "bin" SHOULD match an exact component named "bin"
+        let scanner = make_scanner(vec!["bin".to_string()]);
+
+        assert!(!scanner.should_index(Path::new("/usr/bin/ls")));
+        assert!(!scanner.should_index(Path::new("/home/user/bin/script.sh")));
+        assert!(!scanner.should_index(Path::new("/bin/bash")));
+    }
+
+    #[test]
+    fn test_should_index_hidden_files() {
+        let scanner = make_scanner(vec![".git".to_string(), ".DS_Store".to_string()]);
+
+        // Should exclude exact matches
+        assert!(!scanner.should_index(Path::new("/home/user/project/.git/config")));
+        assert!(!scanner.should_index(Path::new("/Users/test/.DS_Store")));
+
+        // Should NOT exclude when it's just a substring
+        assert!(scanner.should_index(Path::new("/home/user/.github/workflows/ci.yml")));
+        assert!(scanner.should_index(Path::new("/Users/test/my.DS_Store.bak")));
+    }
+
+    #[test]
+    fn test_should_index_glob_extension_patterns() {
+        let scanner = make_scanner(vec!["*.pyc".to_string(), "*.log".to_string()]);
+
+        // Should exclude files with matching extensions
+        assert!(!scanner.should_index(Path::new("/home/user/script.pyc")));
+        assert!(!scanner.should_index(Path::new("/var/log/app.log")));
+        assert!(!scanner.should_index(Path::new("/path/to/file.pyc")));
+
+        // Should NOT exclude files with different extensions
+        assert!(scanner.should_index(Path::new("/home/user/script.py")));
+        assert!(scanner.should_index(Path::new("/home/user/mylog.txt")));
+        assert!(scanner.should_index(Path::new("/path/to/file.py")));
+    }
+
+    #[test]
+    fn test_should_index_glob_prefix_patterns() {
+        let scanner = make_scanner(vec!["._*".to_string()]);
+
+        // Should exclude files starting with "._"
+        assert!(!scanner.should_index(Path::new("/Users/test/._secret")));
+        assert!(!scanner.should_index(Path::new("/path/._metadata")));
+
+        // Should NOT exclude files that just contain "._" elsewhere
+        assert!(scanner.should_index(Path::new("/Users/test/my._file")));
+        assert!(scanner.should_index(Path::new("/Users/test/normal_file")));
+    }
+
+    #[test]
+    fn test_should_index_nested_exclusions() {
+        let scanner = make_scanner(vec!["node_modules".to_string()]);
+
+        // Should exclude anything inside node_modules
+        assert!(!scanner.should_index(Path::new(
+            "/home/user/project/node_modules/package/index.js"
+        )));
+        assert!(!scanner.should_index(Path::new("/project/node_modules/deep/nested/file.txt")));
+
+        // Should NOT exclude paths that just contain the substring
+        assert!(scanner.should_index(Path::new("/home/user/my_node_modules_backup/file.txt")));
+    }
+
+    #[test]
+    fn test_should_index_multiple_exclusions() {
+        let scanner = make_scanner(vec![
+            ".git".to_string(),
+            "target".to_string(),
+            "*.tmp".to_string(),
+        ]);
+
+        // Test each exclusion
+        assert!(!scanner.should_index(Path::new("/project/.git/HEAD")));
+        assert!(!scanner.should_index(Path::new("/rust/project/target/debug/app")));
+        assert!(!scanner.should_index(Path::new("/temp/file.tmp")));
+
+        // Should index everything else
+        assert!(scanner.should_index(Path::new("/project/src/main.rs")));
+        assert!(scanner.should_index(Path::new("/home/user/document.txt")));
+    }
+
+    #[test]
+    fn test_should_index_case_sensitive() {
+        let scanner = make_scanner(vec!["Build".to_string()]);
+
+        // Should exclude exact case match
+        assert!(!scanner.should_index(Path::new("/project/Build/output")));
+
+        // Should NOT exclude different case
+        assert!(scanner.should_index(Path::new("/project/build/output")));
+        assert!(scanner.should_index(Path::new("/project/BUILD/output")));
+    }
+
+    #[test]
+    fn test_should_index_common_directories() {
+        let scanner = make_scanner(vec![
+            ".cache".to_string(),
+            ".venv".to_string(),
+            "__pycache__".to_string(),
+        ]);
+
+        // Should exclude these common directories
+        assert!(!scanner.should_index(Path::new("/home/user/.cache/pip/file")));
+        assert!(!scanner.should_index(Path::new("/project/.venv/lib/python")));
+        assert!(!scanner.should_index(Path::new("/project/__pycache__/module.pyc")));
+
+        // Should NOT exclude similar names
+        assert!(scanner.should_index(Path::new("/home/user/my_cache/file")));
+        assert!(scanner.should_index(Path::new("/project/venv/lib/python")));
+        assert!(scanner.should_index(Path::new("/project/pycache/file")));
+    }
+
+    #[test]
+    fn test_should_index_edge_cases() {
+        let scanner = make_scanner(vec!["*".to_string()]); // Invalid but shouldn't crash
+
+        // Should handle gracefully (doesn't match prefix* or *.ext pattern)
+        assert!(scanner.should_index(Path::new("/any/path/file.txt")));
+    }
+
+    #[test]
+    fn test_should_index_empty_exclusions() {
+        let scanner = make_scanner(vec![]);
+
+        // Should index everything when no exclusions
+        assert!(scanner.should_index(Path::new("/any/path")));
+        assert!(scanner.should_index(Path::new("/.git/config")));
+        assert!(scanner.should_index(Path::new("/file.pyc")));
+    }
+
+    #[test]
+    fn test_should_index_root_components() {
+        let scanner = make_scanner(vec!["Users".to_string()]);
+
+        // Should exclude if "Users" is a component
+        assert!(!scanner.should_index(Path::new("/Users/test/file.txt")));
+
+        // But root "/" itself should be indexable
+        let scanner = make_scanner(vec!["/".to_string()]);
+        assert!(scanner.should_index(Path::new("/home/user/file.txt")));
     }
 }
