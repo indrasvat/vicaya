@@ -1,6 +1,6 @@
 //! Query engine for searching the index.
 
-use crate::{FileId, FileTable, StringArena, Trigram, TrigramIndex};
+use crate::{AbbreviationMatcher, FileId, FileTable, StringArena, Trigram, TrigramIndex};
 use serde::{Deserialize, Serialize};
 
 /// A search query.
@@ -86,12 +86,28 @@ impl<'a> QueryEngine<'a> {
         let name_lower = name.to_lowercase();
         let path_lower = path.to_lowercase();
 
-        if !name_lower.contains(query) && !path_lower.contains(query) {
-            return None;
-        }
+        // Try abbreviation matching first (especially for short queries)
+        let abbr_matcher = AbbreviationMatcher::new();
+        let abbr_score = if let Some(abbr_match) = abbr_matcher.match_path(query, path) {
+            Some(abbr_match.score)
+        } else {
+            None
+        };
 
-        // Calculate score based on match quality
-        let score = self.calculate_score(&name_lower, &path_lower, query);
+        // Try traditional substring matching
+        let substring_score = if name_lower.contains(query) || path_lower.contains(query) {
+            Some(self.calculate_score(&name_lower, &path_lower, query))
+        } else {
+            None
+        };
+
+        // Use the best score from either method
+        let score = match (abbr_score, substring_score) {
+            (Some(a), Some(s)) => a.max(s),
+            (Some(a), None) => a,
+            (None, Some(s)) => s,
+            (None, None) => return None,
+        };
 
         Some(SearchResult {
             path: path.to_string(),
