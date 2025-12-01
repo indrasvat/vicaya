@@ -251,9 +251,11 @@ fn test_exact_match_ranking() {
 
     // "main.rs" should rank higher (prefix match) than "test_main.rs"
     assert_eq!(results.len(), 3);
-    // The first result should be the best match
+    // The first result should be the best match (exact stem match)
     assert!(
-        results[0].contains("main.rs"),
-        "Prefix match should rank highest"
+        results[0].contains("main.rs")
+            && !results[0].contains("test_main")
+            && !results[0].contains("main_test"),
+        "Exact match should rank highest"
     );
 }
