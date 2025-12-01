@@ -353,8 +353,8 @@ impl AbbreviationMatcher {
             let gap_ratio = (total_span - query.len()) as f32 / path_chars.len() as f32;
             let gap_penalty = gap_ratio * 0.10;
 
-            let score = (base_score + consecutive_bonus + position_bonus - gap_penalty)
-                .clamp(0.50, 0.88);
+            let score =
+                (base_score + consecutive_bonus + position_bonus - gap_penalty).clamp(0.50, 0.88);
 
             return Some(AbbreviationMatch {
                 score,
