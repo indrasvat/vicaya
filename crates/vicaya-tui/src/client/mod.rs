@@ -119,8 +119,7 @@ impl IpcClient {
             .read_line(&mut line)
             .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
 
-        Response::from_json(&line)
-            .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
+        Response::from_json(&line).map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
     }
 }
 
