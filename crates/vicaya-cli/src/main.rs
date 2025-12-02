@@ -232,92 +232,84 @@ fn status(format: &str) -> Result<()> {
                 println!();
                 println!(
                     "{}",
-                    "╭─────────────────────────────────────────────────────────╮".bright_blue()
+                    "╭───────────────────────────────────────────────────────╮".bright_blue()
                 );
                 println!(
-                    "{} {} {}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "विचय (vicaya) — Index Status".bold().bright_white(),
+                    "Vicaya — Index Status".bold().bright_white(),
                     "│".bright_blue()
                 );
                 println!(
                     "{}",
-                    "├─────────────────────────────────────────────────────────┤".bright_blue()
+                    "├───────────────────────────────────────────────────────┤".bright_blue()
                 );
 
                 // Daemon info
-                println!(
-                    "{} {} {}",
-                    "│".bright_blue(),
-                    format!("  {} Daemon", "●".bright_green()).bright_white(),
-                    " │".bright_blue()
-                );
                 let pid = vicaya_core::daemon::get_pid().unwrap_or(0);
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    PID: ".dimmed(),
-                    pid.to_string().bright_cyan(),
-                    "                                      │".bright_blue()
+                    format!("  {} Daemon", "●".bright_green()),
+                    "│".bright_blue()
+                );
+                println!(
+                    "{} {:<53} {}",
+                    "│".bright_blue(),
+                    format!("    PID: {}", pid.to_string().bright_cyan()),
+                    "│".bright_blue()
                 );
 
                 println!(
                     "{}",
-                    "├─────────────────────────────────────────────────────────┤".bright_blue()
+                    "├───────────────────────────────────────────────────────┤".bright_blue()
                 );
 
                 // Index stats
                 println!(
-                    "{} {} {}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
                     "  Index Statistics".bold().bright_white(),
-                    "                            │".bright_blue()
+                    "│".bright_blue()
                 );
 
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    Files indexed:    ".dimmed(),
-                    format_number(indexed_files).bright_green().bold(),
-                    " ".repeat(28 - format_number(indexed_files).len())
-                        .to_string()
-                        .to_string()
-                        + "│"
+                    format!(
+                        "    Files indexed:    {}",
+                        format_number(indexed_files).bright_green().bold()
+                    ),
+                    "│".bright_blue()
                 );
 
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    Trigrams:         ".dimmed(),
-                    format_number(trigram_count).bright_yellow(),
-                    " ".repeat(28 - format_number(trigram_count).len())
-                        .to_string()
-                        .to_string()
-                        + "│"
+                    format!(
+                        "    Trigrams:         {}",
+                        format_number(trigram_count).bright_yellow()
+                    ),
+                    "│".bright_blue()
                 );
 
                 let arena_mb = arena_size as f64 / 1_048_576.0;
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    Memory usage:     ".dimmed(),
-                    format!("{:.1} MB", arena_mb).bright_magenta(),
-                    " ".repeat(28 - format!("{:.1} MB", arena_mb).len())
-                        .to_string()
-                        .to_string()
-                        + "│"
+                    format!("    Memory usage:     {}", format!("{:.1} MB", arena_mb).bright_magenta()),
+                    "│".bright_blue()
                 );
 
                 let index_mb = index_size as f64 / 1_048_576.0;
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    Index file size:  ".dimmed(),
-                    format!("{:.1} MB", index_mb).bright_magenta(),
-                    " ".repeat(28 - format!("{:.1} MB", index_mb).len())
-                        .to_string()
-                        .to_string()
-                        + "│"
+                    format!(
+                        "    Index file size:  {}",
+                        format!("{:.1} MB", index_mb).bright_magenta()
+                    ),
+                    "│".bright_blue()
                 );
 
                 if last_updated > 0 {
@@ -325,25 +317,24 @@ fn status(format: &str) -> Result<()> {
                         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                         .unwrap_or_default();
                     println!(
-                        "{} {}{}{}",
+                        "{} {:<53} {}",
                         "│".bright_blue(),
-                        "    Last updated:     ".dimmed(),
-                        dt.bright_cyan(),
-                        " ".repeat(28 - dt.len()).to_string().to_string() + "│"
+                        format!("    Last updated:     {}", dt.bright_cyan()),
+                        "│".bright_blue()
                     );
                 }
 
                 println!(
                     "{}",
-                    "├─────────────────────────────────────────────────────────┤".bright_blue()
+                    "├───────────────────────────────────────────────────────┤".bright_blue()
                 );
 
                 // Efficiency metrics
                 println!(
-                    "{} {} {}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
                     "  Efficiency Metrics".bold().bright_white(),
-                    "                          │".bright_blue()
+                    "│".bright_blue()
                 );
 
                 let bytes_per_file = if indexed_files > 0 {
@@ -352,14 +343,13 @@ fn status(format: &str) -> Result<()> {
                     0
                 };
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    Bytes per file:   ".dimmed(),
-                    format!("{} B", bytes_per_file).bright_green(),
-                    " ".repeat(28 - format!("{} B", bytes_per_file).len())
-                        .to_string()
-                        .to_string()
-                        + "│"
+                    format!(
+                        "    Bytes per file:   {}",
+                        format!("{} B", bytes_per_file).bright_green()
+                    ),
+                    "│".bright_blue()
                 );
 
                 let trigrams_per_file = if indexed_files > 0 {
@@ -368,14 +358,13 @@ fn status(format: &str) -> Result<()> {
                     0.0
                 };
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    Trigrams/file:    ".dimmed(),
-                    format!("{:.1}", trigrams_per_file).bright_yellow(),
-                    " ".repeat(28 - format!("{:.1}", trigrams_per_file).len())
-                        .to_string()
-                        .to_string()
-                        + "│"
+                    format!(
+                        "    Trigrams/file:    {}",
+                        format!("{:.1}", trigrams_per_file).bright_yellow()
+                    ),
+                    "│".bright_blue()
                 );
 
                 let total_mb = (arena_size + index_size as usize) as f64 / 1_048_576.0;
@@ -385,19 +374,18 @@ fn status(format: &str) -> Result<()> {
                     0.0
                 };
                 println!(
-                    "{} {}{}{}",
+                    "{} {:<53} {}",
                     "│".bright_blue(),
-                    "    Total/1K files:   ".dimmed(),
-                    format!("{:.2} MB", mb_per_kfile).bright_magenta(),
-                    " ".repeat(28 - format!("{:.2} MB", mb_per_kfile).len())
-                        .to_string()
-                        .to_string()
-                        + "│"
+                    format!(
+                        "    Total/1K files:   {}",
+                        format!("{:.2} MB", mb_per_kfile).bright_magenta()
+                    ),
+                    "│".bright_blue()
                 );
 
                 println!(
                     "{}",
-                    "╰─────────────────────────────────────────────────────────╯".bright_blue()
+                    "╰───────────────────────────────────────────────────────╯".bright_blue()
                 );
                 println!();
             }
