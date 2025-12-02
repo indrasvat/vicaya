@@ -18,6 +18,30 @@ use ratatui::{
 };
 use std::io;
 
+/// Open a file in the user's preferred editor
+fn open_file_in_editor(path: &str) -> Result<()> {
+    use std::process::Command;
+
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| {
+            // Fallback editors
+            if cfg!(target_os = "macos") {
+                "open".to_string()
+            } else {
+                "vim".to_string()
+            }
+        });
+
+    // Execute editor and wait for it to complete
+    Command::new(&editor)
+        .arg(path)
+        .status()
+        .map_err(|e| anyhow::anyhow!("Failed to open editor '{}': {}", editor, e))?;
+
+    Ok(())
+}
+
 /// Run the TUI application
 pub fn run() -> Result<()> {
     // Setup terminal
@@ -45,6 +69,11 @@ pub fn run() -> Result<()> {
     // Print path if requested (for terminal integration)
     if let Some(path) = app.print_on_exit {
         println!("{}", path);
+    }
+
+    // Open file in editor if requested
+    if let Some(path) = app.open_in_editor {
+        open_file_in_editor(&path)?;
     }
 
     if let Err(err) = res {
@@ -237,31 +266,9 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
 
 /// Open file in $EDITOR or fallback editor
 fn open_in_editor(path: &str, app: &mut AppState) {
-    use std::process::Command;
-
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| {
-            // Fallback editors
-            if cfg!(target_os = "macos") {
-                "open".to_string()
-            } else {
-                "vim".to_string()
-            }
-        });
-
-    // Quit TUI before opening editor
-    app.should_quit = true;
-
-    // Clone for thread
-    let editor = editor.clone();
-    let path = path.to_string();
-
-    // Spawn editor after TUI exits
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let _ = Command::new(&editor).arg(&path).status();
-    });
+    // Store path to open after TUI exits
+    app.open_in_editor = Some(path.to_string());
+    app.quit();
 }
 
 /// Copy path to clipboard
