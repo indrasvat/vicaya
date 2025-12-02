@@ -297,7 +297,10 @@ fn status(format: &str) -> Result<()> {
                 println!(
                     "{} {:<53} {}",
                     "│".bright_blue(),
-                    format!("    Memory usage:     {}", format!("{:.1} MB", arena_mb).bright_magenta()),
+                    format!(
+                        "    Memory usage:     {}",
+                        format!("{:.1} MB", arena_mb).bright_magenta()
+                    ),
                     "│".bright_blue()
                 );
 
