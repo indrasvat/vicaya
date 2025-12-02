@@ -22,3 +22,4 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 num_cpus = "1.16"
+owo-colors = "4.1"

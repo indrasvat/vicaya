@@ -51,7 +51,11 @@ enum Commands {
     },
 
     /// Show index status
-    Status,
+    Status {
+        /// Output format (pretty, json)
+        #[arg(short, long, default_value = "pretty")]
+        format: String,
+    },
 
     /// Manage the daemon
     Daemon {
@@ -89,8 +93,8 @@ fn main() -> Result<()> {
         Some(Commands::Rebuild { dry_run }) => {
             rebuild(dry_run)?;
         }
-        Some(Commands::Status) => {
-            status()?;
+        Some(Commands::Status { format }) => {
+            status(&format)?;
         }
         Some(Commands::Daemon { action }) => {
             daemon_command(action)?;
@@ -185,9 +189,10 @@ fn rebuild(dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn status() -> Result<()> {
-    let mut client = IpcClient::connect()?;
+fn status(format: &str) -> Result<()> {
+    use owo_colors::OwoColorize;
 
+    let mut client = IpcClient::connect()?;
     let request = Request::Status;
     let response = client.request(&request)?;
 
@@ -198,17 +203,192 @@ fn status() -> Result<()> {
             arena_size,
             last_updated,
         } => {
-            println!("Daemon Status:");
-            println!("  Files indexed: {}", indexed_files);
-            println!("  Trigrams: {}", trigram_count);
-            println!("  String arena size: {} bytes", arena_size);
-            if last_updated > 0 {
+            if format == "json" {
+                // JSON output
+                let json = serde_json::json!({
+                    "daemon": {
+                        "running": true,
+                        "pid": vicaya_core::daemon::get_pid().unwrap_or(0),
+                    },
+                    "index": {
+                        "files": indexed_files,
+                        "trigrams": trigram_count,
+                        "arena_bytes": arena_size,
+                        "last_updated": last_updated,
+                    },
+                    "metrics": {
+                        "bytes_per_file": if indexed_files > 0 { arena_size / indexed_files } else { 0 },
+                        "trigrams_per_file": if indexed_files > 0 { trigram_count as f64 / indexed_files as f64 } else { 0.0 },
+                        "arena_size_mb": arena_size as f64 / 1_048_576.0,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            } else {
+                // Pretty output
+                let config = load_config()?;
+                let index_file = config.index_path.join("index.bin");
+                let index_size = std::fs::metadata(&index_file).map(|m| m.len()).unwrap_or(0);
+
+                println!();
                 println!(
-                    "  Last updated: {}",
-                    chrono::DateTime::from_timestamp(last_updated, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_default()
+                    "{}",
+                    "╭─────────────────────────────────────────────────────────╮".bright_blue()
                 );
+                println!(
+                    "{} {} {}",
+                    "│".bright_blue(),
+                    "विचय (vicaya) — Index Status".bold().bright_white(),
+                    "│".bright_blue()
+                );
+                println!(
+                    "{}",
+                    "├─────────────────────────────────────────────────────────┤".bright_blue()
+                );
+
+                // Daemon info
+                println!(
+                    "{} {} {}",
+                    "│".bright_blue(),
+                    format!("  {} Daemon", "●".bright_green()).bright_white(),
+                    " │".bright_blue()
+                );
+                let pid = vicaya_core::daemon::get_pid().unwrap_or(0);
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    PID: ".dimmed(),
+                    pid.to_string().bright_cyan(),
+                    "                                      │".bright_blue()
+                );
+
+                println!(
+                    "{}",
+                    "├─────────────────────────────────────────────────────────┤".bright_blue()
+                );
+
+                // Index stats
+                println!(
+                    "{} {} {}",
+                    "│".bright_blue(),
+                    "  Index Statistics".bold().bright_white(),
+                    "                            │".bright_blue()
+                );
+
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    Files indexed:    ".dimmed(),
+                    format_number(indexed_files).bright_green().bold(),
+                    " ".repeat(28 - format_number(indexed_files).len()).to_string().to_string()
+                        + "│"
+                );
+
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    Trigrams:         ".dimmed(),
+                    format_number(trigram_count).bright_yellow(),
+                    " ".repeat(28 - format_number(trigram_count).len()).to_string().to_string()
+                        + "│"
+                );
+
+                let arena_mb = arena_size as f64 / 1_048_576.0;
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    Memory usage:     ".dimmed(),
+                    format!("{:.1} MB", arena_mb).bright_magenta(),
+                    " ".repeat(28 - format!("{:.1} MB", arena_mb).len()).to_string().to_string()
+                        + "│"
+                );
+
+                let index_mb = index_size as f64 / 1_048_576.0;
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    Index file size:  ".dimmed(),
+                    format!("{:.1} MB", index_mb).bright_magenta(),
+                    " ".repeat(28 - format!("{:.1} MB", index_mb).len()).to_string().to_string()
+                        + "│"
+                );
+
+                if last_updated > 0 {
+                    let dt = chrono::DateTime::from_timestamp(last_updated, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_default();
+                    println!(
+                        "{} {}{}{}",
+                        "│".bright_blue(),
+                        "    Last updated:     ".dimmed(),
+                        dt.bright_cyan(),
+                        " ".repeat(28 - dt.len()).to_string().to_string() + "│"
+                    );
+                }
+
+                println!(
+                    "{}",
+                    "├─────────────────────────────────────────────────────────┤".bright_blue()
+                );
+
+                // Efficiency metrics
+                println!(
+                    "{} {} {}",
+                    "│".bright_blue(),
+                    "  Efficiency Metrics".bold().bright_white(),
+                    "                          │".bright_blue()
+                );
+
+                let bytes_per_file = if indexed_files > 0 {
+                    arena_size / indexed_files
+                } else {
+                    0
+                };
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    Bytes per file:   ".dimmed(),
+                    format!("{} B", bytes_per_file).bright_green(),
+                    " ".repeat(28 - format!("{} B", bytes_per_file).len()).to_string()
+                        .to_string()
+                        + "│"
+                );
+
+                let trigrams_per_file = if indexed_files > 0 {
+                    trigram_count as f64 / indexed_files as f64
+                } else {
+                    0.0
+                };
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    Trigrams/file:    ".dimmed(),
+                    format!("{:.1}", trigrams_per_file).bright_yellow(),
+                    " ".repeat(28 - format!("{:.1}", trigrams_per_file).len()).to_string()
+                    .to_string()
+                        + "│"
+                );
+
+                let total_mb = (arena_size + index_size as usize) as f64 / 1_048_576.0;
+                let mb_per_kfile = if indexed_files > 0 {
+                    total_mb / (indexed_files as f64 / 1000.0)
+                } else {
+                    0.0
+                };
+                println!(
+                    "{} {}{}{}",
+                    "│".bright_blue(),
+                    "    Total/1K files:   ".dimmed(),
+                    format!("{:.2} MB", mb_per_kfile).bright_magenta(),
+                    " ".repeat(28 - format!("{:.2} MB", mb_per_kfile).len()).to_string()
+                    .to_string()
+                        + "│"
+                );
+
+                println!(
+                    "{}",
+                    "╰─────────────────────────────────────────────────────────╯".bright_blue()
+                );
+                println!();
             }
             Ok(())
         }
@@ -221,6 +401,20 @@ fn status() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+
+    for (count, c) in s.chars().rev().enumerate() {
+        if count > 0 && count % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+
+    result.chars().rev().collect()
 }
 
 fn daemon_command(action: DaemonAction) -> Result<()> {
