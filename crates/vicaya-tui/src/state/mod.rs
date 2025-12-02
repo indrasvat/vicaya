@@ -66,12 +66,20 @@ impl AppState {
         }
 
         self.search.is_searching = true;
+
+        // Try to reconnect if not connected
+        if !self.client.is_connected() {
+            self.client.reconnect();
+        }
+
         match self.client.search(query, 100) {
             Ok(results) => {
                 self.search.set_results(results);
                 self.error = None;
             }
             Err(e) => {
+                // Try reconnecting on error
+                self.client.reconnect();
                 self.error = Some(format!("Search error: {}", e));
                 self.search.results.clear();
             }
@@ -109,6 +117,15 @@ impl Default for AppState {
     }
 }
 
+/// Focus target in search mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusTarget {
+    /// Search input is focused
+    Input,
+    /// Results list is focused
+    Results,
+}
+
 /// Search state
 pub struct SearchState {
     /// Current query
@@ -121,6 +138,8 @@ pub struct SearchState {
     pub is_searching: bool,
     /// Cursor position in query input
     pub cursor_position: usize,
+    /// Current focus target
+    pub focus: FocusTarget,
 }
 
 impl SearchState {
@@ -132,7 +151,26 @@ impl SearchState {
             selected_index: 0,
             is_searching: false,
             cursor_position: 0,
+            focus: FocusTarget::Input,
         }
+    }
+
+    /// Toggle focus between input and results
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            FocusTarget::Input => FocusTarget::Results,
+            FocusTarget::Results => FocusTarget::Input,
+        };
+    }
+
+    /// Check if input is focused
+    pub fn is_input_focused(&self) -> bool {
+        self.focus == FocusTarget::Input
+    }
+
+    /// Check if results are focused
+    pub fn is_results_focused(&self) -> bool {
+        self.focus == FocusTarget::Results
     }
 
     /// Update query
