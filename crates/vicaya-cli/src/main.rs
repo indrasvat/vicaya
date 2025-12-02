@@ -247,16 +247,26 @@ fn status(format: &str) -> Result<()> {
 
                 // Daemon info
                 let pid = vicaya_core::daemon::get_pid().unwrap_or(0);
+                // Note: "●" is 3 bytes but 1 char, so use .chars().count() for assertion
+                let plain_line = format!("  {} Daemon{:<43}", "●", "");
+                assert_eq!(plain_line.chars().count(), 53);
+                let daemon_line = format!(" Daemon{:<43}", "");
                 println!(
-                    "{} {:<53} {}",
+                    "{}   {}{} {}",
                     "│".bright_blue(),
-                    format!("  {} Daemon", "●".bright_green()),
+                    "●".bright_green(),
+                    daemon_line,
                     "│".bright_blue()
                 );
+
+                let pid_str = pid.to_string();
+                let plain_line = format!("    PID: {:<44}", pid_str);
+                assert_eq!(plain_line.len(), 53);
+                let pid_line = format!("{:<44}", pid_str).bright_cyan().to_string();
                 println!(
-                    "{} {:<53} {}",
+                    "{}     PID: {} {}",
                     "│".bright_blue(),
-                    format!("    PID: {}", pid.to_string().bright_cyan()),
+                    pid_line,
                     "│".bright_blue()
                 );
 
