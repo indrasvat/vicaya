@@ -37,6 +37,8 @@ pub struct AppState {
     pub should_quit: bool,
     /// Last error message
     pub error: Option<String>,
+    /// Path to print on exit (for terminal integration)
+    pub print_on_exit: Option<String>,
 }
 
 impl AppState {
@@ -53,6 +55,7 @@ impl AppState {
             daemon_status,
             should_quit: false,
             error: None,
+            print_on_exit: None,
         }
     }
 

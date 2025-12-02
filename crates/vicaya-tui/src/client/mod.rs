@@ -97,20 +97,37 @@ impl IpcClient {
 
     /// Send a request and receive a response.
     fn request(&mut self, req: &Request) -> anyhow::Result<Response> {
-        let stream = self
-            .stream
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to daemon"))?;
+        // Try with existing connection first
+        let mut stream = if let Some(stream) = self.stream.as_mut() {
+            stream
+        } else {
+            // No connection, try to establish one
+            self.reconnect();
+            self.stream
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("Daemon not running"))?
+        };
 
-        // Send request
+        // Serialize request
         let mut request_json = req
             .to_json()
             .map_err(|e| anyhow::anyhow!("Failed to serialize request: {}", e))?;
         request_json.push('\n');
 
-        stream
-            .write_all(request_json.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
+        // Try to send request
+        let result = stream.write_all(request_json.as_bytes());
+
+        // If write failed, try reconnecting once
+        if result.is_err() {
+            self.reconnect();
+            stream = self
+                .stream
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("Daemon not running"))?;
+            stream
+                .write_all(request_json.as_bytes())
+                .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
+        }
 
         // Read response
         let mut reader = BufReader::new(stream);
