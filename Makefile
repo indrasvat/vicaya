@@ -104,12 +104,32 @@ run: install ## Install binaries, start daemon, and launch TUI
 	@if pgrep -f vicaya-daemon > /dev/null; then \
 		echo "⚠️  Daemon already running (PID: $$(pgrep -f vicaya-daemon))"; \
 	else \
-		vicaya daemon start && echo "✅ Daemon started"; \
+		vicaya daemon start && echo "✅ Daemon started" && sleep 2; \
 	fi
+	@echo "Waiting for daemon to be ready..."
+	@for i in 1 2 3 4 5; do \
+		if vicaya daemon status >/dev/null 2>&1; then \
+			echo "✅ Daemon is ready!"; \
+			break; \
+		fi; \
+		echo "  Waiting... ($$i/5)"; \
+		sleep 1; \
+	done
 	@echo "Launching TUI..."
 	@vicaya-tui
 
-dev: build daemon-dev tui-dev ## Build, start daemon, and launch TUI (no install needed)
+dev: build daemon-dev ## Build, start daemon, and launch TUI (no install needed)
+	@echo "Waiting for daemon to be ready..."
+	@for i in 1 2 3 4 5; do \
+		if pgrep -f vicaya-daemon >/dev/null 2>&1; then \
+			echo "✅ Daemon is ready!"; \
+			break; \
+		fi; \
+		echo "  Waiting... ($$i/5)"; \
+		sleep 1; \
+	done
+	@echo "Launching vicaya TUI (dev mode)..."
+	@cargo run --package vicaya-tui --release
 
 ci: fmt lint test build ## Run CI pipeline (same as 'all')
 	@echo "CI pipeline complete ✅"
