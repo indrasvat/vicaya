@@ -1,4 +1,4 @@
-.PHONY: help all build test lint fmt check ci bench clean install-dev
+.PHONY: help all build test lint fmt check ci bench clean install-dev install daemon-start daemon-stop tui run
 
 .DEFAULT_GOAL := help
 
@@ -41,6 +41,46 @@ clean: ## Clean build artifacts
 install-dev: ## Install vicaya CLI locally for development
 	@echo "Installing vicaya CLI locally..."
 	cargo install --path crates/vicaya-cli
+
+install: ## Install CLI, daemon, and TUI
+	@echo "Building and installing vicaya..."
+	@cargo build --release --workspace
+	@echo "Installing vicaya CLI..."
+	@cargo install --path crates/vicaya-cli --force
+	@echo "Installing vicaya daemon..."
+	@cargo install --path crates/vicaya-daemon --force
+	@echo "Installing vicaya TUI..."
+	@cargo install --path crates/vicaya-tui --force
+	@echo "✅ Installation complete!"
+	@echo ""
+	@echo "Binaries installed:"
+	@which vicaya || echo "  ⚠️  vicaya not in PATH"
+	@which vicaya-daemon || echo "  ⚠️  vicaya-daemon not in PATH"
+	@which vicaya-tui || echo "  ⚠️  vicaya-tui not in PATH"
+
+daemon-start: ## Start the daemon (builds if needed)
+	@echo "Starting vicaya daemon..."
+	@if pgrep -f vicaya-daemon > /dev/null; then \
+		echo "⚠️  Daemon already running (PID: $$(pgrep -f vicaya-daemon))"; \
+	else \
+		cargo run --package vicaya-cli --release -- daemon start && \
+		echo "✅ Daemon started"; \
+	fi
+
+daemon-stop: ## Stop the daemon
+	@echo "Stopping vicaya daemon..."
+	@if pgrep -f vicaya-daemon > /dev/null; then \
+		cargo run --package vicaya-cli --release -- daemon stop && \
+		echo "✅ Daemon stopped"; \
+	else \
+		echo "⚠️  Daemon not running"; \
+	fi
+
+tui: daemon-start ## Launch the TUI (starts daemon if needed)
+	@echo "Launching vicaya TUI..."
+	@cargo run --package vicaya-tui --release
+
+run: build daemon-start tui ## Build everything, start daemon, and launch TUI
 
 ci: fmt lint test build ## Run CI pipeline (same as 'all')
 	@echo "CI pipeline complete ✅"
