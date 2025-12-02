@@ -1,4 +1,4 @@
-.PHONY: help all build test lint fmt check ci bench clean install-dev install daemon-start daemon-stop tui run
+.PHONY: help all build test lint fmt check ci bench clean install-dev install daemon-start daemon-stop daemon-dev tui tui-dev run dev
 
 .DEFAULT_GOAL := help
 
@@ -76,11 +76,32 @@ daemon-stop: ## Stop the daemon
 		echo "⚠️  Daemon not running"; \
 	fi
 
+daemon-dev: ## Start daemon directly with cargo run (no install needed)
+	@echo "Starting vicaya daemon (dev mode)..."
+	@if pgrep -f vicaya-daemon > /dev/null; then \
+		echo "⚠️  Daemon already running (PID: $$(pgrep -f vicaya-daemon))"; \
+	else \
+		cargo run --package vicaya-daemon --release & \
+		sleep 2 && \
+		if pgrep -f vicaya-daemon > /dev/null; then \
+			echo "✅ Daemon started in background (PID: $$(pgrep -f vicaya-daemon))"; \
+		else \
+			echo "❌ Failed to start daemon"; \
+			exit 1; \
+		fi \
+	fi
+
 tui: daemon-start ## Launch the TUI (starts daemon if needed)
 	@echo "Launching vicaya TUI..."
 	@cargo run --package vicaya-tui --release
 
-run: build daemon-start tui ## Build everything, start daemon, and launch TUI
+tui-dev: daemon-dev ## Launch TUI in dev mode (no install needed)
+	@echo "Launching vicaya TUI (dev mode)..."
+	@cargo run --package vicaya-tui --release
+
+run: install ## Install binaries, start daemon, and launch TUI
+
+dev: build daemon-dev tui-dev ## Build, start daemon, and launch TUI (no install needed)
 
 ci: fmt lint test build ## Run CI pipeline (same as 'all')
 	@echo "CI pipeline complete ✅"
