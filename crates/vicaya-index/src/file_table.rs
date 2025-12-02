@@ -3,8 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Unique identifier for a file entry.
+///
+/// Uses u32 to support up to 4.2 billion files while minimizing memory usage.
+/// This is more than sufficient for any single-machine filesystem indexer.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct FileId(pub u64);
+pub struct FileId(pub u32);
 
 /// Metadata for a single file entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,10 +45,19 @@ impl FileTable {
     }
 
     /// Insert a new file entry.
+    ///
+    /// # Panics
+    /// Panics if the file table exceeds u32::MAX entries (4.2 billion files).
     pub fn insert(&mut self, meta: FileMeta) -> FileId {
-        let id = FileId(self.entries.len() as u64);
+        let id = self.entries.len();
+        assert!(
+            id <= u32::MAX as usize,
+            "File table exceeded u32::MAX capacity ({} files)",
+            u32::MAX
+        );
+        let file_id = FileId(id as u32);
         self.entries.push(meta);
-        id
+        file_id
     }
 
     /// Get a file entry by ID.
@@ -63,7 +75,7 @@ impl FileTable {
         self.entries
             .iter()
             .enumerate()
-            .map(|(i, meta)| (FileId(i as u64), meta))
+            .map(|(i, meta)| (FileId(i as u32), meta))
     }
 
     /// Number of entries in the table.
