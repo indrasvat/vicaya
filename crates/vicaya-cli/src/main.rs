@@ -266,52 +266,58 @@ fn status(format: &str) -> Result<()> {
                 );
 
                 // Index stats
+                // Build plain line first, then apply colors
+                let title_line = format!("{:53}", "  Index Statistics");
                 println!(
-                    "{} {:<53} {}",
+                    "{} {} {}",
                     "│".bright_blue(),
-                    "  Index Statistics".bold().bright_white(),
+                    title_line.bold(),
                     "│".bright_blue()
                 );
 
+                let files_str = format_number(indexed_files);
+                let plain_line = format!("    Files indexed:{:>35}", files_str);
+                assert_eq!(plain_line.len(), 53);
                 println!(
-                    "{} {:<53} {}",
+                    "{} {}{} {}",
                     "│".bright_blue(),
-                    format!(
-                        "    Files indexed:    {}",
-                        format_number(indexed_files).bright_green().bold()
-                    ),
+                    "    Files indexed:".dimmed(),
+                    format!("{:>35}", files_str).bright_green().bold(),
                     "│".bright_blue()
                 );
 
+                let trigrams_str = format_number(trigram_count);
+                let plain_line = format!("    Trigrams:{:>40}", trigrams_str);
+                assert_eq!(plain_line.len(), 53);
                 println!(
-                    "{} {:<53} {}",
+                    "{} {}{} {}",
                     "│".bright_blue(),
-                    format!(
-                        "    Trigrams:         {}",
-                        format_number(trigram_count).bright_yellow()
-                    ),
+                    "    Trigrams:".dimmed(),
+                    format!("{:>40}", trigrams_str).bright_yellow(),
                     "│".bright_blue()
                 );
 
                 let arena_mb = arena_size as f64 / 1_048_576.0;
+                let arena_str = format!("{:.1} MB", arena_mb);
+                let plain_line = format!("    Memory usage:{:>36}", arena_str);
+                assert_eq!(plain_line.len(), 53);
                 println!(
-                    "{} {:<53} {}",
+                    "{} {}{} {}",
                     "│".bright_blue(),
-                    format!(
-                        "    Memory usage:     {}",
-                        format!("{:.1} MB", arena_mb).bright_magenta()
-                    ),
+                    "    Memory usage:".dimmed(),
+                    format!("{:>36}", arena_str).bright_magenta(),
                     "│".bright_blue()
                 );
 
                 let index_mb = index_size as f64 / 1_048_576.0;
+                let index_str = format!("{:.1} MB", index_mb);
+                let plain_line = format!("    Index file size:{:>33}", index_str);
+                assert_eq!(plain_line.len(), 53);
                 println!(
-                    "{} {:<53} {}",
+                    "{} {}{} {}",
                     "│".bright_blue(),
-                    format!(
-                        "    Index file size:  {}",
-                        format!("{:.1} MB", index_mb).bright_magenta()
-                    ),
+                    "    Index file size:".dimmed(),
+                    format!("{:>33}", index_str).bright_magenta(),
                     "│".bright_blue()
                 );
 
@@ -319,10 +325,13 @@ fn status(format: &str) -> Result<()> {
                     let dt = chrono::DateTime::from_timestamp(last_updated, 0)
                         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                         .unwrap_or_default();
+                    let plain_line = format!("    Last updated:{:>36}", dt);
+                    assert_eq!(plain_line.len(), 53);
                     println!(
-                        "{} {:<53} {}",
+                        "{} {}{} {}",
                         "│".bright_blue(),
-                        format!("    Last updated:     {}", dt.bright_cyan()),
+                        "    Last updated:".dimmed(),
+                        format!("{:>36}", dt).bright_cyan(),
                         "│".bright_blue()
                     );
                 }
@@ -333,10 +342,11 @@ fn status(format: &str) -> Result<()> {
                 );
 
                 // Efficiency metrics
+                let title_line = format!("{:53}", "  Efficiency Metrics");
                 println!(
-                    "{} {:<53} {}",
+                    "{} {} {}",
                     "│".bright_blue(),
-                    "  Efficiency Metrics".bold().bright_white(),
+                    title_line.bold().bright_white(),
                     "│".bright_blue()
                 );
 
@@ -345,13 +355,14 @@ fn status(format: &str) -> Result<()> {
                 } else {
                     0
                 };
+                let bpf_str = format!("{} B", bytes_per_file);
+                let plain_line = format!("    Bytes per file:{:>34}", bpf_str);
+                assert_eq!(plain_line.len(), 53);
                 println!(
-                    "{} {:<53} {}",
+                    "{} {}{} {}",
                     "│".bright_blue(),
-                    format!(
-                        "    Bytes per file:   {}",
-                        format!("{} B", bytes_per_file).bright_green()
-                    ),
+                    "    Bytes per file:".dimmed(),
+                    format!("{:>34}", bpf_str).bright_green(),
                     "│".bright_blue()
                 );
 
@@ -360,13 +371,14 @@ fn status(format: &str) -> Result<()> {
                 } else {
                     0.0
                 };
+                let tpf_str = format!("{:.1}", trigrams_per_file);
+                let plain_line = format!("    Trigrams/file:{:>35}", tpf_str);
+                assert_eq!(plain_line.len(), 53);
                 println!(
-                    "{} {:<53} {}",
+                    "{} {}{} {}",
                     "│".bright_blue(),
-                    format!(
-                        "    Trigrams/file:    {}",
-                        format!("{:.1}", trigrams_per_file).bright_yellow()
-                    ),
+                    "    Trigrams/file:".dimmed(),
+                    format!("{:>35}", tpf_str).bright_yellow(),
                     "│".bright_blue()
                 );
 
@@ -376,13 +388,14 @@ fn status(format: &str) -> Result<()> {
                 } else {
                     0.0
                 };
+                let mbpk_str = format!("{:.2} MB", mb_per_kfile);
+                let plain_line = format!("    Total/1K files:{:>34}", mbpk_str);
+                assert_eq!(plain_line.len(), 53);
                 println!(
-                    "{} {:<53} {}",
+                    "{} {}{} {}",
                     "│".bright_blue(),
-                    format!(
-                        "    Total/1K files:   {}",
-                        format!("{:.2} MB", mb_per_kfile).bright_magenta()
-                    ),
+                    "    Total/1K files:".dimmed(),
+                    format!("{:>34}", mbpk_str).bright_magenta(),
                     "│".bright_blue()
                 );
 
