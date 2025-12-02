@@ -563,6 +563,59 @@ tests/
 - **Type Checking:** Rust compiler (no `unsafe` unless well-justified & reviewed).
 - **Security Scanning:** `cargo audit` for known vulnerable dependencies (in CI).
 
+### Terminal UI Formatting Standards
+
+#### ANSI Color Codes & Format Width (Critical for Box UIs)
+
+When building terminal UIs with colored text and fixed-width layouts (status panels, tables, box drawing), Rust's format specifiers can break alignment because they count **bytes** (including invisible ANSI escape codes), not visual width.
+
+**Problem Example:**
+```rust
+// ❌ WRONG - Colors applied before width calculation
+println!("{} {:<53} {}", "│", "text".bright_green(), "│");
+// The colored string includes ~10 invisible ANSI escape bytes
+// Format specifier counts these, breaking alignment
+```
+
+**Solution Pattern:**
+```rust
+// ✅ CORRECT - Calculate width on plain text first, then apply colors
+let label = "    Files:";
+let value = "4,576";
+
+// 1. Build plain line and verify exact width
+let plain_line = format!("{}{:>43}", label, value);
+assert_eq!(plain_line.len(), 53);
+
+// 2. Print with colors applied AFTER width calculations
+println!(
+    "{} {}{} {}",
+    "│".bright_blue(),
+    label.dimmed(),
+    format!("{:>43}", value).bright_green(),
+    "│".bright_blue()
+);
+```
+
+**Special Case - Unicode Characters:**
+```rust
+// Unicode chars may be multiple bytes but display as 1 character
+// Example: "●" (U+25CF) is 3 bytes but 1 visible character
+let plain_line = format!("  {} Daemon{:<43}", "●", "");
+assert_eq!(plain_line.chars().count(), 53);  // Use .chars().count(), not .len()
+```
+
+**Key Principles:**
+1. Always calculate widths on **plain text without colors**
+2. Use `.len()` for ASCII-only text, `.chars().count()` for Unicode
+3. Apply colors **after** format specifiers have done their padding
+4. Verify with assertions: `assert_eq!(plain_line.len(), expected_width)`
+5. Extract colored parts into variables before `println!` to satisfy clippy
+
+**Applies to:** Status displays (`vicaya status`), box drawing UIs, tables, any fixed-width formatting with colors.
+
+**Reference Implementation:** See `crates/vicaya-cli/src/main.rs` status command for working examples.
+
 ### Git Workflow
 
 #### Commit Standards
