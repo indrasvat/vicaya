@@ -1,0 +1,40 @@
+[package]
+name = "vicaya-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# TUI dependencies
+ratatui = "0.28"
+crossterm = "0.28"
+tui-input = "0.10"
+unicode-width = "0.1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Vicaya crates
+vicaya-core = { path = "../vicaya-core" }
+vicaya-index = { path = "../vicaya-index" }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "vicaya-tui"
+path = "src/main.rs"

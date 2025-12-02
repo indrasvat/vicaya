@@ -6,6 +6,7 @@ members = [
     "crates/vicaya-watcher",
     "crates/vicaya-daemon",
     "crates/vicaya-cli",
+    "crates/vicaya-tui",
 ]
 resolver = "2"
 
