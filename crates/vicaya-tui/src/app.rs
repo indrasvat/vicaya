@@ -488,10 +488,7 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
 
             // Get parent directory path (remove filename)
             let path = std::path::Path::new(&result.path);
-            let dir_path = path
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("");
+            let dir_path = path.parent().and_then(|p| p.to_str()).unwrap_or("");
 
             // Truncate path if not selected
             let display_path = truncate_path(dir_path, max_path_len.max(30), is_selected);
@@ -503,7 +500,9 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
                 Span::raw(" "),
                 Span::styled(
                     format!("({}) ", display_path),
-                    Style::default().fg(ui::TEXT_MUTED).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(ui::TEXT_MUTED)
+                        .add_modifier(Modifier::DIM),
                 ),
                 Span::styled(
                     format!("{:.2}", result.score),
