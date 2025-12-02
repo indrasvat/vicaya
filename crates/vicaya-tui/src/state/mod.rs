@@ -39,6 +39,8 @@ pub struct AppState {
     pub error: Option<String>,
     /// Path to print on exit (for terminal integration)
     pub print_on_exit: Option<String>,
+    /// Path to open in editor after exit
+    pub open_in_editor: Option<String>,
 }
 
 impl AppState {
@@ -56,6 +58,7 @@ impl AppState {
             should_quit: false,
             error: None,
             print_on_exit: None,
+            open_in_editor: None,
         }
     }
 
