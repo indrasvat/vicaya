@@ -100,6 +100,14 @@ tui-dev: daemon-dev ## Launch TUI in dev mode (no install needed)
 	@cargo run --package vicaya-tui --release
 
 run: install ## Install binaries, start daemon, and launch TUI
+	@echo "Starting daemon..."
+	@if pgrep -f vicaya-daemon > /dev/null; then \
+		echo "⚠️  Daemon already running (PID: $$(pgrep -f vicaya-daemon))"; \
+	else \
+		vicaya daemon start && echo "✅ Daemon started"; \
+	fi
+	@echo "Launching TUI..."
+	@vicaya-tui
 
 dev: build daemon-dev tui-dev ## Build, start daemon, and launch TUI (no install needed)
 
