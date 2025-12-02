@@ -188,7 +188,10 @@ fn render_header(f: &mut Frame, area: Rect, app: &AppState) {
                 .fg(ui::PRIMARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" - Fast File Search", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled(
+            " - Fast File Search",
+            Style::default().fg(ui::TEXT_SECONDARY),
+        ),
     ];
 
     // Add daemon status
