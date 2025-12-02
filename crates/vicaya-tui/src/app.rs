@@ -42,6 +42,11 @@ pub fn run() -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
+    // Print path if requested (for terminal integration)
+    if let Some(path) = app.print_on_exit {
+        println!("{}", path);
+    }
+
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
     }
@@ -55,19 +60,41 @@ fn run_app<B: ratatui::backend::Backend>(
     app: &mut AppState,
 ) -> Result<()> {
     let mut last_query = String::new();
+    let mut last_search_time = std::time::Instant::now();
+    let mut error_clear_time: Option<std::time::Instant> = None;
 
     loop {
         // Draw UI
         terminal.draw(|f| ui_render(f, app))?;
 
-        // Check if query changed and trigger search
+        // Clear temporary success messages after 2 seconds
+        if let Some(clear_time) = error_clear_time {
+            if clear_time.elapsed() > std::time::Duration::from_secs(2) {
+                if let Some(ref error) = app.error {
+                    if error.starts_with('✓') {
+                        app.error = None;
+                        error_clear_time = None;
+                    }
+                }
+            }
+        } else if let Some(ref error) = app.error {
+            if error.starts_with('✓') {
+                error_clear_time = Some(std::time::Instant::now());
+            }
+        }
+
+        // Check if query changed and trigger search (with debounce)
         if app.search.query != last_query {
-            last_query = app.search.query.clone();
-            app.perform_search();
+            let elapsed = last_search_time.elapsed();
+            if elapsed > std::time::Duration::from_millis(150) || app.search.query.is_empty() {
+                last_query = app.search.query.clone();
+                app.perform_search();
+                last_search_time = std::time::Instant::now();
+            }
         }
 
         // Handle events
-        if event::poll(std::time::Duration::from_millis(100))? {
+        if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 handle_key_event(app, key.code, key.modifiers);
             }
@@ -178,11 +205,126 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
             app.search.select_last();
         }
+        // File actions
+        (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Char('o'), KeyModifiers::NONE) => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                open_in_editor(&path, app);
+            }
+        }
+        (KeyCode::Char('y'), KeyModifiers::NONE) => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                copy_to_clipboard(&path, app);
+            }
+        }
+        (KeyCode::Char('p'), KeyModifiers::NONE) => {
+            if let Some(result) = app.search.selected_result() {
+                app.print_on_exit = Some(result.path.clone());
+                app.quit();
+            }
+        }
+        (KeyCode::Char('r'), KeyModifiers::NONE) => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                reveal_in_finder(&path, app);
+            }
+        }
         // Quit
         (KeyCode::Char('q'), KeyModifiers::NONE) => {
             app.quit();
         }
         _ => {}
+    }
+}
+
+/// Open file in $EDITOR or fallback editor
+fn open_in_editor(path: &str, app: &mut AppState) {
+    use std::process::Command;
+
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| {
+            // Fallback editors
+            if cfg!(target_os = "macos") {
+                "open".to_string()
+            } else {
+                "vim".to_string()
+            }
+        });
+
+    // Quit TUI before opening editor
+    app.should_quit = true;
+
+    // Clone for thread
+    let editor = editor.clone();
+    let path = path.to_string();
+
+    // Spawn editor after TUI exits
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let _ = Command::new(&editor).arg(&path).status();
+    });
+}
+
+/// Copy path to clipboard
+fn copy_to_clipboard(path: &str, app: &mut AppState) {
+    use std::process::Command;
+
+    let result = if cfg!(target_os = "macos") {
+        Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    stdin.write_all(path.as_bytes())?;
+                }
+                child.wait()
+            })
+    } else {
+        Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    stdin.write_all(path.as_bytes())?;
+                }
+                child.wait()
+            })
+    };
+
+    match result {
+        Ok(_) => {
+            app.error = Some(format!("✓ Copied: {}", path));
+        }
+        Err(e) => {
+            app.error = Some(format!("Failed to copy: {}", e));
+        }
+    }
+}
+
+/// Reveal file in file manager
+fn reveal_in_finder(path: &str, app: &mut AppState) {
+    use std::process::Command;
+
+    let result = if cfg!(target_os = "macos") {
+        Command::new("open").args(["-R", path]).spawn()
+    } else {
+        // On Linux, open the parent directory
+        let parent = std::path::Path::new(path)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or(path);
+        Command::new("xdg-open").arg(parent).spawn()
+    };
+
+    match result {
+        Ok(_) => {
+            app.error = Some(format!("✓ Revealed: {}", path));
+        }
+        Err(e) => {
+            app.error = Some(format!("Failed to reveal: {}", e));
+        }
     }
 }
 
@@ -306,10 +448,35 @@ fn render_search_input(f: &mut Frame, area: Rect, app: &AppState) {
     }
 }
 
+/// Truncate path intelligently for display
+fn truncate_path(path: &str, max_len: usize, show_full: bool) -> String {
+    if show_full || path.len() <= max_len {
+        return path.to_string();
+    }
+
+    // Show beginning and end with ... in the middle
+    let start_len = max_len / 2;
+    let end_len = max_len - start_len - 3; // Reserve 3 chars for "..."
+
+    if path.len() > max_len {
+        format!(
+            "{}...{}",
+            &path[..start_len],
+            &path[path.len().saturating_sub(end_len)..]
+        )
+    } else {
+        path.to_string()
+    }
+}
+
 /// Render results list
 fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
     let results = &app.search.results;
     let selected = app.search.selected_index;
+
+    // Calculate available width for path display (rough estimate)
+    let available_width = area.width.saturating_sub(4); // Account for borders
+    let max_path_len = available_width.saturating_sub(30) as usize; // Reserve space for name, score, marker
 
     let items: Vec<ListItem> = results
         .iter()
@@ -317,12 +484,27 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
         .map(|(i, result)| {
             let marker = if i == selected { "▸" } else { " " };
             let score_color = ui::score_color(result.score);
+            let is_selected = i == selected;
+
+            // Get parent directory path (remove filename)
+            let path = std::path::Path::new(&result.path);
+            let dir_path = path
+                .parent()
+                .and_then(|p| p.to_str())
+                .unwrap_or("");
+
+            // Truncate path if not selected
+            let display_path = truncate_path(dir_path, max_path_len.max(30), is_selected);
 
             let line = Line::from(vec![
                 Span::styled(marker, Style::default().fg(ui::PRIMARY)),
                 Span::raw(" "),
                 Span::styled(&result.name, Style::default().fg(ui::TEXT_PRIMARY)),
                 Span::raw(" "),
+                Span::styled(
+                    format!("({}) ", display_path),
+                    Style::default().fg(ui::TEXT_MUTED).add_modifier(Modifier::DIM),
+                ),
                 Span::styled(
                     format!("{:.2}", result.score),
                     Style::default().fg(score_color),
@@ -366,10 +548,14 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &AppState) {
     // Add focus-specific hints
     if app.search.is_results_focused() {
         spans.extend(vec![
-            Span::styled("j/k:", Style::default().fg(ui::PRIMARY)),
-            Span::styled(" ↑↓  ", Style::default().fg(ui::TEXT_SECONDARY)),
-            Span::styled("g/G:", Style::default().fg(ui::PRIMARY)),
-            Span::styled(" top/bot  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("↵:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" open  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("y:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" copy  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("p:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" print  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("r:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" reveal  ", Style::default().fg(ui::TEXT_SECONDARY)),
         ]);
     }
 
@@ -405,13 +591,19 @@ fn render_help(f: &mut Frame) {
         "  ↓ (in input)  Move to results",
         "  ↑ (at top)    Move to input",
         "",
-        "Results Navigation (when focused):",
+        "Navigation (when results focused):",
         "  j / ↓         Move down",
         "  k / ↑         Move up",
         "  g             Jump to top",
         "  G             Jump to bottom",
         "",
-        "Actions:",
+        "File Actions (when results focused):",
+        "  Enter / o     Open in $EDITOR",
+        "  y             Copy path to clipboard",
+        "  p             Print path and exit (terminal)",
+        "  r             Reveal in file manager",
+        "",
+        "Other:",
         "  Esc           Clear search / back to input",
         "  Ctrl-c        Quit",
         "",
