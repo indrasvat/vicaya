@@ -93,16 +93,79 @@ fn handle_key_event(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
 
 /// Handle keys in search mode
 fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    // Global keys that work regardless of focus
     match (key, modifiers) {
         // Quit
-        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), KeyModifiers::NONE) => {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
             app.quit();
+            return;
         }
         // Help
-        (KeyCode::Char('?'), KeyModifiers::NONE) => {
+        (KeyCode::Char('?'), KeyModifiers::NONE) if !app.search.is_input_focused() => {
             app.toggle_help();
+            return;
         }
-        // Navigation
+        // Toggle focus with Tab
+        (KeyCode::Tab, KeyModifiers::NONE) => {
+            app.search.toggle_focus();
+            return;
+        }
+        // Escape clears search or changes focus
+        (KeyCode::Esc, KeyModifiers::NONE) => {
+            if app.search.is_results_focused() {
+                app.search.focus = crate::state::FocusTarget::Input;
+            } else {
+                app.search.clear_query();
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    // Focus-specific keys
+    if app.search.is_input_focused() {
+        handle_input_keys(app, key, modifiers);
+    } else {
+        handle_results_keys(app, key, modifiers);
+    }
+}
+
+/// Handle keys when input is focused
+fn handle_input_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        // Typing characters
+        (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+            app.search.insert_char(c);
+        }
+        // Backspace
+        (KeyCode::Backspace, KeyModifiers::NONE) => {
+            app.search.delete_char();
+        }
+        // Cursor movement
+        (KeyCode::Left, KeyModifiers::NONE) => {
+            app.search.move_cursor_left();
+        }
+        (KeyCode::Right, KeyModifiers::NONE) => {
+            app.search.move_cursor_right();
+        }
+        // Down arrow switches to results if there are any
+        (KeyCode::Down, KeyModifiers::NONE) => {
+            if !app.search.results.is_empty() {
+                app.search.focus = crate::state::FocusTarget::Results;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle keys when results are focused
+fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        // Up arrow at top goes back to input
+        (KeyCode::Up, KeyModifiers::NONE) if app.search.selected_index == 0 => {
+            app.search.focus = crate::state::FocusTarget::Input;
+        }
+        // Navigation - vi keys and arrows
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
             app.search.select_next();
         }
@@ -115,22 +178,9 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
         (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
             app.search.select_last();
         }
-        // Clear search
-        (KeyCode::Esc, KeyModifiers::NONE) => {
-            app.search.clear_query();
-        }
-        // Input
-        (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
-            app.search.insert_char(c);
-        }
-        (KeyCode::Backspace, KeyModifiers::NONE) => {
-            app.search.delete_char();
-        }
-        (KeyCode::Left, KeyModifiers::NONE) => {
-            app.search.move_cursor_left();
-        }
-        (KeyCode::Right, KeyModifiers::NONE) => {
-            app.search.move_cursor_right();
+        // Quit
+        (KeyCode::Char('q'), KeyModifiers::NONE) => {
+            app.quit();
         }
         _ => {}
     }
@@ -221,25 +271,38 @@ fn render_header(f: &mut Frame, area: Rect, app: &AppState) {
 fn render_search_input(f: &mut Frame, area: Rect, app: &AppState) {
     let query = &app.search.query;
     let cursor_pos = app.search.cursor_position;
+    let is_focused = app.search.is_input_focused();
+
+    // Use different border style based on focus
+    let border_style = if is_focused {
+        Style::default().fg(ui::BORDER_FOCUS)
+    } else {
+        Style::default().fg(ui::BORDER_DIM)
+    };
 
     let input = Paragraph::new(Line::from(vec![
-        Span::styled("🔍 ", Style::default().fg(ui::ACCENT)),
+        Span::styled("> ", Style::default().fg(ui::ACCENT)),
         Span::styled(query, Style::default().fg(ui::TEXT_PRIMARY)),
     ]))
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(ui::BORDER_FOCUS))
-            .style(Style::default().bg(ui::BG_ELEVATED)),
+            .border_style(border_style)
+            .style(if is_focused {
+                Style::default().bg(ui::BG_ELEVATED)
+            } else {
+                Style::default()
+            }),
     );
 
     f.render_widget(input, area);
 
-    // Show cursor
-    if cursor_pos < query.len() {
-        f.set_cursor_position((area.x + 3 + cursor_pos as u16, area.y + 1));
-    } else {
-        f.set_cursor_position((area.x + 3 + query.len() as u16, area.y + 1));
+    // Show cursor only when input is focused
+    if is_focused {
+        // Cursor position: 1 (border) + 1 (space after >) + cursor_pos
+        let cursor_x = area.x + 3 + cursor_pos as u16;
+        let cursor_y = area.y + 1;
+        f.set_cursor_position((cursor_x, cursor_y));
     }
 }
 
@@ -276,10 +339,17 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
         })
         .collect();
 
+    // Show focused border when results are focused
+    let border_style = if app.search.is_results_focused() {
+        Style::default().fg(ui::BORDER_FOCUS)
+    } else {
+        Style::default().fg(ui::BORDER_DIM)
+    };
+
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(ui::BORDER_DIM))
+            .border_style(border_style)
             .title(format!("RESULTS ({})", results.len())),
     );
 
@@ -289,15 +359,26 @@ fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
 /// Render status bar
 fn render_status_bar(f: &mut Frame, area: Rect, app: &AppState) {
     let mut spans = vec![
-        Span::styled("j/k:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" ↑↓  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled("Tab:", Style::default().fg(ui::PRIMARY)),
+        Span::styled(" switch  ", Style::default().fg(ui::TEXT_SECONDARY)),
+    ];
+
+    // Add focus-specific hints
+    if app.search.is_results_focused() {
+        spans.extend(vec![
+            Span::styled("j/k:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" ↑↓  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("g/G:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" top/bot  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        ]);
+    }
+
+    spans.extend(vec![
         Span::styled("Esc:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" clear  ", Style::default().fg(ui::TEXT_SECONDARY)),
-        Span::styled("?:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" help  ", Style::default().fg(ui::TEXT_SECONDARY)),
-        Span::styled("q:", Style::default().fg(ui::PRIMARY)),
+        Span::styled("Ctrl-c:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" quit", Style::default().fg(ui::TEXT_SECONDARY)),
-    ];
+    ]);
 
     // Show error if any
     if let Some(error) = &app.error {
@@ -319,21 +400,22 @@ fn render_help(f: &mut Frame) {
     let help_text = vec![
         "Vicaya - Fast File Search TUI",
         "",
-        "Navigation:",
+        "Focus:",
+        "  Tab           Switch between input/results",
+        "  ↓ (in input)  Move to results",
+        "  ↑ (at top)    Move to input",
+        "",
+        "Results Navigation (when focused):",
         "  j / ↓         Move down",
         "  k / ↑         Move up",
         "  g             Jump to top",
         "  G             Jump to bottom",
         "",
         "Actions:",
-        "  Enter         Open file",
-        "  Esc           Clear search",
+        "  Esc           Clear search / back to input",
+        "  Ctrl-c        Quit",
         "",
-        "System:",
-        "  ?             Toggle help",
-        "  q / Ctrl-c    Quit",
-        "",
-        "Press ? or Esc to close this help",
+        "Press Esc to close this help",
     ];
 
     let help = Paragraph::new(help_text.join("\n"))
