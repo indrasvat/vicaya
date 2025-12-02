@@ -279,7 +279,9 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue(),
                     "    Files indexed:    ".dimmed(),
                     format_number(indexed_files).bright_green().bold(),
-                    " ".repeat(28 - format_number(indexed_files).len()).to_string().to_string()
+                    " ".repeat(28 - format_number(indexed_files).len())
+                        .to_string()
+                        .to_string()
                         + "│"
                 );
 
@@ -288,7 +290,9 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue(),
                     "    Trigrams:         ".dimmed(),
                     format_number(trigram_count).bright_yellow(),
-                    " ".repeat(28 - format_number(trigram_count).len()).to_string().to_string()
+                    " ".repeat(28 - format_number(trigram_count).len())
+                        .to_string()
+                        .to_string()
                         + "│"
                 );
 
@@ -298,7 +302,9 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue(),
                     "    Memory usage:     ".dimmed(),
                     format!("{:.1} MB", arena_mb).bright_magenta(),
-                    " ".repeat(28 - format!("{:.1} MB", arena_mb).len()).to_string().to_string()
+                    " ".repeat(28 - format!("{:.1} MB", arena_mb).len())
+                        .to_string()
+                        .to_string()
                         + "│"
                 );
 
@@ -308,7 +314,9 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue(),
                     "    Index file size:  ".dimmed(),
                     format!("{:.1} MB", index_mb).bright_magenta(),
-                    " ".repeat(28 - format!("{:.1} MB", index_mb).len()).to_string().to_string()
+                    " ".repeat(28 - format!("{:.1} MB", index_mb).len())
+                        .to_string()
+                        .to_string()
                         + "│"
                 );
 
@@ -348,7 +356,8 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue(),
                     "    Bytes per file:   ".dimmed(),
                     format!("{} B", bytes_per_file).bright_green(),
-                    " ".repeat(28 - format!("{} B", bytes_per_file).len()).to_string()
+                    " ".repeat(28 - format!("{} B", bytes_per_file).len())
+                        .to_string()
                         .to_string()
                         + "│"
                 );
@@ -363,8 +372,9 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue(),
                     "    Trigrams/file:    ".dimmed(),
                     format!("{:.1}", trigrams_per_file).bright_yellow(),
-                    " ".repeat(28 - format!("{:.1}", trigrams_per_file).len()).to_string()
-                    .to_string()
+                    " ".repeat(28 - format!("{:.1}", trigrams_per_file).len())
+                        .to_string()
+                        .to_string()
                         + "│"
                 );
 
@@ -379,8 +389,9 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue(),
                     "    Total/1K files:   ".dimmed(),
                     format!("{:.2} MB", mb_per_kfile).bright_magenta(),
-                    " ".repeat(28 - format!("{:.2} MB", mb_per_kfile).len()).to_string()
-                    .to_string()
+                    " ".repeat(28 - format!("{:.2} MB", mb_per_kfile).len())
+                        .to_string()
+                        .to_string()
                         + "│"
                 );
 
