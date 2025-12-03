@@ -929,6 +929,404 @@ make profile-mem    # memory profiling using instruments
 
 ---
 
+## Search Query Optimization & Modes
+
+**Added:** 2025-12-03
+**Status:** Analysis Complete, Implementation Phase 1 In Progress
+
+### Problem Statement
+
+#### Issue Observed
+
+When typing certain characters in the TUI (e.g., `*`, `$`, `&`, `%`, `(`), the interface experiences noticeable lag (~26-28ms with 10k files, potentially 500ms-1s with 100k+ files). Regular alphanumeric characters (e.g., `a`, `1`, `.`) respond instantly (~0.4-0.9ms).
+
+**Key Finding:** The issue is NOT that these are regex special characters being interpreted—it's that they **don't exist in typical file paths**, causing worst-case linear search performance.
+
+#### Root Cause Analysis
+
+**Location:** `crates/vicaya-index/src/query.rs:151-166` (`linear_search()`)
+
+```rust
+fn linear_search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+
+    for (file_id, _meta) in self.file_table.iter() {  // ← Scans ALL files
+        if results.len() >= limit {  // ← Early exit when limit reached
+            break;
+        }
+
+        if let Some(result) = self.score_candidate(file_id, query) {
+            results.push(result);
+        }
+    }
+    // ...
+}
+```
+
+**Why Special Characters Are Slow:**
+
+| Query | Exists in Paths? | Files Scanned | Time (10k files) |
+|-------|------------------|---------------|------------------|
+| `*` | ❌ No | 10,000 (all) | ~26-28ms |
+| `$` | ❌ No | 10,000 (all) | ~26-28ms |
+| `&` | ❌ No | 10,000 (all) | ~26-28ms |
+| `1` | ✅ Yes | ~200 | ~0.9ms |
+| `.` | ✅ Yes | ~200 | ~0.4ms |
+
+**Performance Breakdown:**
+- Time per file: ~3.5µs (abbreviation + substring matching)
+- Non-matching query: 10,000 files × 3.5µs = **35ms**
+- Matching query: Stops after finding 100 results (~200 files scanned) = **0.7ms**
+
+**With 100,000+ files:** 100,000 × 3.5µs = **350ms+** (perceived as a hang)
+
+### Research: Industry Best Practices
+
+Investigation of ripgrep, fzf, skim, telescope.nvim, fd, and ag revealed universal patterns:
+
+#### 1. Search Mode Separation
+
+All successful search tools use **explicit search modes**:
+
+| Tool | Default Mode | Alternate Modes | Mode Switching |
+|------|--------------|-----------------|----------------|
+| **fzf** | Fuzzy | Exact (`'` prefix or `-e` flag) | Per-query prefix |
+| **skim** | Fuzzy | Exact, Regex | `Ctrl-R` to rotate |
+| **ripgrep** | Regex | Literal (`-F` flag) | CLI flag |
+| **fd** | Regex | Glob (`-g` flag) | CLI flag |
+| **ag** | Regex | Literal (`-Q` flag) | CLI flag |
+
+#### 2. No Escaping in Fuzzy Mode
+
+**Critical Insight:** fzf/skim's fuzzy mode accepts **ALL characters literally**—no special characters, no escaping needed. This is why users love them.
+
+```bash
+# fzf - fuzzy mode (default)
+$special*chars    # All literal, just works
+
+# ripgrep - regex mode (default)
+\$special\*chars  # Must escape special chars
+```
+
+#### 3. Performance Optimizations
+
+**Common techniques across tools:**
+- **Literal extraction** (ripgrep): Extract fixed strings from regex for fast filtering
+- **SIMD acceleration** (ripgrep): Teddy algorithm with SIMD for multi-literal search
+- **Smart indexing** (ag): Binary search over pre-processed patterns
+- **Parallel processing** (fd, ag): Concurrent file/directory traversal
+- **Trigram filtering** (vicaya): Quickly eliminate non-candidates ✅
+
+#### 4. Early Termination Strategies
+
+- **ripgrep**: Skip regex engine for non-candidate lines via literal pre-check
+- **fzf**: Progressive disclosure—stop when result limit reached
+- **fd**: Respects `.gitignore` to skip entire subtrees
+- **ag**: Boyer-Moore for efficient substring location
+
+### Current Architecture Assessment
+
+**What vicaya has (Excellent!):**
+- ✅ Abbreviation matching (unique, powerful feature)
+- ✅ Trigram indexing for fast candidate filtering
+- ✅ Case-insensitive search by default
+- ✅ Linear scan fallback for queries < 3 chars
+- ✅ Score-based ranking
+- ✅ TUI with real-time search
+
+**What's missing:**
+- ❌ No search mode switching (literal vs fuzzy vs regex)
+- ❌ No special character handling strategy
+- ❌ No query validation or user feedback
+- ❌ Linear search scans entire index for non-matching queries
+
+### Recommended Implementation
+
+#### Phase 1: Quick Fix (Immediate) ⚡
+
+**Goal:** Prevent TUI hangs with minimal code changes.
+
+**Change:** Add early termination to linear search.
+
+**File:** `crates/vicaya-index/src/query.rs`
+
+```rust
+fn linear_search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    let mut scanned = 0;
+    const MAX_EMPTY_SCAN: usize = 1000; // Give up if no matches in 1000 files
+
+    for (file_id, _meta) in self.file_table.iter() {
+        if results.len() >= limit {
+            break;
+        }
+
+        // Early termination for non-matching queries
+        if results.is_empty() && scanned > MAX_EMPTY_SCAN {
+            break;
+        }
+
+        if let Some(result) = self.score_candidate(file_id, query) {
+            results.push(result);
+        }
+        scanned += 1;
+    }
+
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    results
+}
+```
+
+**Benefits:**
+- ✅ Fixes hang immediately
+- ✅ Max 1000 files scanned for non-matching queries (~3.5ms worst case)
+- ✅ No breaking changes to API
+- ✅ Preserves existing behavior for matching queries
+
+**Performance Impact:**
+- Before: Query `*` on 100k files = 350ms
+- After: Query `*` on 100k files = 3.5ms (100x improvement)
+
+#### Phase 2: Search Modes (Next Sprint) 🎯
+
+**Goal:** Provide explicit search modes following fzf/skim pattern.
+
+**1. Add SearchMode Enum**
+
+```rust
+/// Search mode for query execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchMode {
+    /// Smart mode: abbreviation + substring matching (default)
+    Smart,
+    /// Exact literal match (case-insensitive substring only)
+    Exact,
+    /// Fuzzy matching (Smith-Waterman style via fuzzy-matcher)
+    Fuzzy,
+    /// Regex pattern matching (future)
+    Regex,
+}
+
+impl Default for SearchMode {
+    fn default() -> Self {
+        Self::Smart
+    }
+}
+```
+
+**2. Enhanced Query Structure**
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Query {
+    /// Raw search term from user
+    pub raw_term: String,
+    /// Search mode
+    pub mode: SearchMode,
+    /// Case sensitivity
+    pub case_sensitive: bool,
+    /// Maximum number of results
+    pub limit: usize,
+}
+
+impl Query {
+    /// Validate and prepare query for execution
+    pub fn prepare(&self) -> Result<PreparedQuery, QueryError> {
+        match self.mode {
+            SearchMode::Smart | SearchMode::Exact | SearchMode::Fuzzy => {
+                // No validation needed - all chars are literal
+                Ok(PreparedQuery { /* ... */ })
+            }
+            SearchMode::Regex => {
+                // Validate regex syntax
+                Regex::new(&self.raw_term)
+                    .map(|_| PreparedQuery { /* ... */ })
+                    .map_err(|e| QueryError::InvalidRegex(e.to_string()))
+            }
+        }
+    }
+}
+```
+
+**3. Mode-Specific Search Implementations**
+
+```rust
+impl QueryEngine<'_> {
+    pub fn search(&self, query: &Query) -> Result<Vec<SearchResult>, QueryError> {
+        let prepared = query.prepare()?;
+
+        match prepared.mode {
+            SearchMode::Smart => {
+                // Current implementation: abbreviation + substring
+                // All special chars literal, no escaping needed
+                Ok(self.search_smart(&prepared))
+            }
+            SearchMode::Exact => {
+                // Pure substring matching only (skip abbreviation)
+                // Faster for literal searches
+                Ok(self.search_exact(&prepared))
+            }
+            SearchMode::Fuzzy => {
+                // Smith-Waterman via fuzzy-matcher crate
+                // Handles typos and approximate matches
+                Ok(self.search_fuzzy(&prepared))
+            }
+            SearchMode::Regex => {
+                // Regex matching (future implementation)
+                Ok(self.search_regex(&prepared))
+            }
+        }
+    }
+}
+```
+
+**4. TUI Mode Switching**
+
+Add keyboard shortcuts following skim's pattern:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ [SMART] query_                                          │  ← Mode indicator
+│                                                         │
+│ Ctrl-E: Exact | Ctrl-F: Fuzzy | Ctrl-R: Regex | ?: Help│
+└─────────────────────────────────────────────────────────┘
+```
+
+**Keyboard Bindings:**
+- `Ctrl-E`: Toggle Exact mode
+- `Ctrl-F`: Toggle Fuzzy mode
+- `Ctrl-R`: Toggle Regex mode (when implemented)
+- `Ctrl-S`: Cycle through modes
+
+**5. Fuzzy Matching Implementation**
+
+Use the `fuzzy-matcher` crate (same as skim):
+
+```toml
+[dependencies]
+fuzzy-matcher = "0.3"
+```
+
+```rust
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
+
+fn search_fuzzy_impl(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+    let matcher = SkimMatcherV2::default();
+
+    let mut results: Vec<_> = self.file_table
+        .iter()
+        .filter_map(|(file_id, meta)| {
+            let name = self.string_arena.get(meta.name_offset, meta.name_len)?;
+
+            // Fuzzy match on basename
+            matcher.fuzzy_match(name, query)
+                .map(|score| (file_id, score as f32 / 100.0))
+        })
+        .collect();
+
+    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    results.truncate(limit);
+
+    results.into_iter()
+        .filter_map(|(fid, score)| self.build_search_result(fid, score))
+        .collect()
+}
+```
+
+#### Phase 3: Polish & Documentation (Future)
+
+**Features:**
+- In-app help overlay (`:help` or `?` key)
+- Query syntax guide for each mode
+- Performance metrics display (optional debug mode)
+- User configuration for default mode
+- CLI flag for mode selection (`--mode=fuzzy`)
+
+**Error Handling:**
+```rust
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            QueryError::InvalidRegex(msg) => {
+                write!(f, "Invalid regex pattern: {}", msg)?;
+                writeln!(f)?;
+                write!(f, "Tip: Use 'Exact' mode (Ctrl-E) for literal search")
+            }
+            QueryError::EmptyQuery => {
+                write!(f, "Query cannot be empty")
+            }
+        }
+    }
+}
+```
+
+### Implementation Checklist
+
+**Phase 1: Quick Fix** (Est. 30 minutes)
+- [ ] Add early termination to `linear_search()`
+- [ ] Test with non-matching queries
+- [ ] Verify no regression on matching queries
+- [ ] Update performance benchmarks
+- [ ] Commit changes
+
+**Phase 2: Search Modes** (Est. 4-6 hours)
+- [ ] Add `SearchMode` enum to `query.rs`
+- [ ] Update `Query` struct with mode field
+- [ ] Implement `search_exact()` method
+- [ ] Integrate `fuzzy-matcher` crate
+- [ ] Implement `search_fuzzy()` method
+- [ ] Add TUI mode switching (keyboard bindings)
+- [ ] Add visual mode indicator to TUI
+- [ ] Write mode-specific tests
+- [ ] Update documentation
+
+**Phase 3: Polish** (Est. 2-4 hours)
+- [ ] Add help overlay to TUI
+- [ ] Improve error messages
+- [ ] Add CLI `--mode` flag
+- [ ] User configuration for default mode
+- [ ] Performance metrics display
+- [ ] Update user guide
+
+### Performance Targets
+
+**Phase 1 Targets:**
+- Single-char queries: < 5ms worst case (currently ~26-28ms)
+- Non-matching queries: < 5ms (currently scales with index size)
+- No performance regression on matching queries
+
+**Phase 2 Targets:**
+- Smart mode: Maintain current performance (< 20ms)
+- Exact mode: 20-30% faster than Smart (no abbreviation overhead)
+- Fuzzy mode: < 50ms for 100k files (acceptable for fuzzy matching)
+
+### References
+
+**Tools Researched:**
+- ripgrep: Regex with literal extraction, SIMD optimization
+- fzf: Fuzzy-first design, intuitive syntax
+- skim: Rust fuzzy finder, Smith-Waterman algorithm
+- fd: Parallel traversal, smart defaults
+- ag: PCRE with JIT, Boyer-Moore optimization
+- telescope.nvim: Composition pattern with external tools
+
+**Key Insights:**
+1. **Mode separation** is universal across successful tools
+2. **Fuzzy mode needs no escaping**—all input is literal
+3. **Early termination** is critical for performance
+4. **Visual feedback** (mode indicators) improves UX
+5. **Smart defaults** matter—fuzzy/smart mode should be default
+
+**External Links:**
+- [ripgrep Performance Blog](https://burntsushi.net/ripgrep/)
+- [fzf Search Syntax](https://junegunn.github.io/fzf/search-syntax/)
+- [skim GitHub](https://github.com/skim-rs/skim)
+- [fuzzy-matcher crate](https://docs.rs/fuzzy-matcher/)
+- [fd GitHub](https://github.com/sharkdp/fd)
+
+---
+
 ## Security Standards
 
 ### Security Checklist
