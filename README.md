@@ -12,7 +12,7 @@ vicaya is a macOS-native filesystem search tool inspired by "Everything" on Wind
 - **Trigram Index**: Fast substring matching using trigram-based inverted index
 - **Live Updates**: FSEvents-based file watcher keeps index up-to-date
 - **Low Memory**: Efficient memory-mapped file storage
-- **CLI & Daemon**: Command-line interface with background daemon
+- **CLI, Daemon & TUI**: Command-line tools, always-on daemon, and terminal UI for instant results
 
 ## Status
 
@@ -46,39 +46,95 @@ Latest coverage report: [Codecov dashboard](https://codecov.io/gh/indrasvat/vica
 - Rust 1.70+ (stable toolchain)
 - macOS 10.15+ (Catalina or later)
 
-### Build
+### Build & Test
 
 ```bash
 # Clone the repository
 git clone https://github.com/indrasvat/vicaya.git
 cd vicaya
 
-# Build the workspace
-make build
+# Compile everything
+make build            # or `cargo build --workspace`
 
-# Run tests
-make test
+# Format, lint, and test
+make check            # runs fmt + clippy + tests
 
-# Install CLI locally
-make install-dev
+# Individual steps are also available: make fmt | make lint | make test
 ```
 
-### Usage
+### Run the Stack
 
 ```bash
-# Build an index (first time)
+# Fast dev loop: build, start daemon, and launch the TUI
+make dev              # uses release binaries for realistic perf
+
+# Install the CLI only (for scripting)
+make install-dev      # cargo install --path crates/vicaya-cli
+
+# Full install (CLI + daemon + TUI in ~/.cargo/bin)
+make install
+
+# Once installed, the one-shot demo target will start the daemon
+# and open the TUI with the published binaries
+make run
+```
+
+### CLI Usage
+
+```bash
+# Build an index (first run)
 vicaya rebuild
 
 # Search for files
 vicaya search "main.rs" --limit 10
 
-# Check index status
+# Check daemon/index status
 vicaya status
 
 # Output formats
 vicaya search "config" --format json
 vicaya search "test" --format plain
+
+# Manage the daemon manually
+vicaya daemon start
+vicaya daemon status
+vicaya daemon stop
 ```
+
+### TUI Usage
+
+The TUI connects to the same daemon and gives you instant, fuzzy-as-you-type results.
+
+```bash
+# Dev mode (builds + starts daemon if needed)
+make dev
+
+# Assuming binaries are installed already
+make daemon-start
+vicaya-tui
+
+# Stop the daemon when done
+make daemon-stop
+```
+
+## Make Targets Reference
+
+`make help` prints the full list, but the most common targets are below:
+
+| Target | Description |
+| --- | --- |
+| `make build` | Compile the entire workspace (all crates). |
+| `make fmt` / `make lint` / `make test` | Run rustfmt, clippy (all targets/features), or the full test suite. |
+| `make check` | Convenience combo: fmt → lint → test. |
+| `make bench` | Execute the Criterion benchmarks. |
+| `make install-dev` | `cargo install` the CLI locally for quick scripting. |
+| `make install` | Install CLI, daemon, and TUI binaries into `~/.cargo/bin`. |
+| `make dev` | Build, spawn the daemon in the background, and launch the TUI (dev workflow). |
+| `make run` | Install release binaries, start the daemon, and open the TUI (simulates end-user setup). |
+| `make daemon-start` / `make daemon-stop` | Manage the daemon using the installed CLI. |
+| `make daemon-dev` / `make tui-dev` | Run daemon or TUI straight from source without installing. |
+| `make clean` | Remove `target/` artifacts. |
+| `make ci` | Local CI parity: fmt + lint + test + build. |
 
 ## Architecture
 
@@ -90,6 +146,7 @@ vicaya is organized as a Rust workspace with multiple crates:
 - **vicaya-watcher**: FSEvents-based file watcher
 - **vicaya-daemon**: Background service
 - **vicaya-cli**: Command-line interface
+- **vicaya-tui**: Terminal UI that streams live results from the daemon
 
 See [docs/vicaya.md](docs/vicaya.md) for the complete implementation guide.
 
@@ -121,6 +178,8 @@ make bench
 1. Run the **Release Prepare** workflow (from GitHub Actions) or via CLI: `gh workflow run release-prepare.yml -f level=minor -f dry_run=true` for a rehearsal. Once satisfied, rerun with `dry_run=false`. This invokes [`cargo release`](https://github.com/crate-ci/cargo-release) using `release.toml` to bump versions, tag `v<semver>`, and push the metadata.
 2. When the tag lands on `main`, the **Release** workflow builds universal macOS binaries, packages `.pkg` and `.tar.gz` installers, uploads SHA256 sums, and publishes a GitHub Release with auto-generated notes.
 3. Download artifacts from the release page or from CI pull requests (see the `vicaya-universal` and `vicaya-linux-binaries` artifacts) for manual validation.
+
+Each artifact bundle contains the CLI (`vicaya`), daemon (`vicaya-daemon`), and TUI (`vicaya-tui`) binaries so you can exercise the full stack.
 
 Always run `cargo release <level> --workspace --no-publish --execute --dry-run` locally before firing the workflow.
 
