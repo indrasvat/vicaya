@@ -1,0 +1,30 @@
+# Rust
+/target
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# vicaya data
+*.bin
+/index/
+
+# Test artifacts
+/tests/fixtures/generated/
+
+# Benchmark tools
+hyperfine*
+
+# Local working documents
+TUI_IMPLEMENTATION_GUIDE.md

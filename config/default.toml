@@ -1,0 +1,29 @@
+# vicaya default configuration
+
+# Paths to index (roots)
+index_roots = ["~"]
+
+# Paths to exclude from indexing
+exclusions = [
+    "/System",
+    "/Library",
+    "/.git",
+    "/node_modules",
+    "/target",
+    "/.cargo",
+    "/.rustup",
+]
+
+# Path to store the index data
+# Default: ~/Library/Application Support/vicaya
+# index_path = "~/Library/Application Support/vicaya"
+
+# Maximum memory usage in MB
+max_memory_mb = 512
+
+[performance]
+# Number of parallel scanner threads (0 = auto-detect)
+scanner_threads = 0
+
+# Hour to run reconciliation (0-23)
+reconcile_hour = 3
