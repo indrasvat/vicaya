@@ -1,5 +1,4 @@
 # Configuration for cargo-release to manage workspace version bumps + tagging.
-workspace = true
 allow-branch = ["main"]
 publish = false
 push = true
@@ -11,4 +10,3 @@ tag-name = "v{{version}}"
 tag-message = "Release v{{version}}"
 pre-release-hook = ["cargo", "fmt", "--all"]
 pre-release-replacements = []
-replace = true
