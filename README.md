@@ -124,6 +124,16 @@ make bench
 
 Always run `cargo release <level> --workspace --no-publish --execute --dry-run` locally before firing the workflow.
 
+### Running Unsigned macOS Artifacts
+
+CI artifacts are currently unsigned, so macOS adds a quarantine flag when you download them via a browser. If Finder refuses to launch them (or moves them to Trash), strip the flag manually before running:
+
+```bash
+xattr -dr com.apple.quarantine /Users/you/Downloads/vicaya-aarch64-apple-darwin-binaries
+```
+
+After clearing the attribute you can run `./vicaya --version`, `./vicaya-daemon --version`, etc. This cannot be automated in CI because Gatekeeper attaches the flag on the downloader’s machine; the long-term fix is to codesign/notarize artifacts once a Developer ID certificate is available.
+
 ## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
