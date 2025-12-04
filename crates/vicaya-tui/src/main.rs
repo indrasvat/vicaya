@@ -3,6 +3,11 @@
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{}", vicaya_core::build_info::version_string("vicaya-tui"));
+        return Ok(());
+    }
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(

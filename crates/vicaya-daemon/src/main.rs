@@ -12,6 +12,14 @@ use crate::ipc_server::IpcServer;
 fn main() -> Result<()> {
     vicaya_core::logging::init();
 
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!(
+            "{}",
+            vicaya_core::build_info::version_string("vicaya-daemon")
+        );
+        return Ok(());
+    }
+
     info!("vicaya daemon starting...");
 
     // Load or create default config
