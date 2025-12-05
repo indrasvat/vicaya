@@ -1,4 +1,4 @@
-.PHONY: help all build test lint fmt fmt-check check ci bench clean install-dev install daemon-start daemon-stop daemon-dev tui tui-dev run dev
+.PHONY: help all build test lint fmt fmt-check check ci bench clean install-dev install daemon-start daemon-stop daemon-dev tui tui-dev run dev hooks
 
 .DEFAULT_GOAL := help
 
@@ -10,7 +10,7 @@ help: ## Show this help message
 	@echo "\033[1mAvailable targets:\033[0m"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[32m%-12s\033[0m %s\n", $$1, $$2}'
 
-all: ci ## Run full CI pipeline (fmt + lint + test + build)
+all: hooks ci ## Run full CI pipeline (fmt + lint + test + build)
 
 build: ## Build the workspace
 	@echo "Building workspace..."
@@ -135,5 +135,13 @@ dev: build daemon-dev ## Build, start daemon, and launch TUI (no install needed)
 	@echo "Launching vicaya TUI (dev mode)..."
 	@cargo run --package vicaya-tui --release
 
-ci: fmt-check lint test build ## Run CI pipeline (same as 'all')
+hooks: ## Install git hooks via lefthook (no-op if lefthook is missing)
+	@if command -v lefthook >/dev/null 2>&1; then \
+		echo "Installing git hooks with lefthook..."; \
+		lefthook install; \
+	else \
+		echo "lefthook not installed; skipping hook install (brew install lefthook or cargo install lefthook)"; \
+	fi
+
+ci: hooks fmt-check lint test build ## Run CI pipeline (same as 'all')
 	@echo "CI pipeline complete ✅"
