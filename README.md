@@ -1,6 +1,6 @@
 # vicaya (विचय)
 
-[![codecov](https://codecov.io/gh/indrasvat/vicaya/branch/main/graph/badge.svg)](https://codecov.io/gh/indrasvat/vicaya)
+[![Release](https://img.shields.io/github/v/release/indrasvat/vicaya?sort=semver)](https://github.com/indrasvat/vicaya/releases) [![codecov](https://codecov.io/gh/indrasvat/vicaya/branch/main/graph/badge.svg)](https://codecov.io/gh/indrasvat/vicaya)
 
 **विचय** — blazing-fast filesystem search for macOS in Rust.
 
@@ -16,8 +16,6 @@ vicaya is a macOS-native filesystem search tool inspired by "Everything" on Wind
 
 ## Status
 
-**Current Version**: 0.2.0  
-_Keep this in sync with Cargo.toml during releases._
 **Status**: Under Active Development (Phase 1 Complete)
 
 Latest coverage report: [Codecov dashboard](https://codecov.io/gh/indrasvat/vicaya).
