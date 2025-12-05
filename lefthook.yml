@@ -1,0 +1,6 @@
+pre-push:
+  commands:
+    ci:
+      run: make ci
+      env:
+        CARGO_TERM_COLOR: always

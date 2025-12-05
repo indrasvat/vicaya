@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-checks:
+    name: Linux checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run fmt/lint/tests
+        run: make check
+
+  macos-build:
+    name: Build macOS ${{ matrix.target }}
+    needs: linux-checks
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+
+      - name: Package binaries
+        run: |
+          mkdir -p artifacts/${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/vicaya artifacts/${{ matrix.target }}/vicaya
+          cp target/${{ matrix.target }}/release/vicaya-daemon artifacts/${{ matrix.target }}/vicaya-daemon
+          cp target/${{ matrix.target }}/release/vicaya-tui artifacts/${{ matrix.target }}/vicaya-tui
+
+      - name: Upload macOS binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: vicaya-${{ matrix.target }}-binaries
+          path: artifacts/${{ matrix.target }}
+
+  package-release:
+    name: Package installers
+    needs:
+      - macos-build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: vicaya-aarch64-apple-darwin-binaries
+          path: dist/aarch64
+
+      - name: Download x86_64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: vicaya-x86_64-apple-darwin-binaries
+          path: dist/x86_64
+
+      - name: Build universal binaries
+        run: scripts/release/make-universal.sh dist/aarch64 dist/x86_64 dist/universal/bin
+
+      - name: Package tarball installer
+        run: scripts/release/package-tar.sh dist/universal/bin dist/vicaya-${{ github.ref_name }}-universal.tar.gz
+
+      - name: Package macOS pkg installer
+        env:
+          PKG_IDENTIFIER: org.indrasvat.vicaya
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          scripts/release/package-pkg.sh dist/universal/bin dist/vicaya-${GITHUB_REF_NAME}-universal.pkg "$VERSION"
+
+      - name: Checksums
+        run: |
+          cd dist
+          for file in *.tar.gz *.pkg; do
+            shasum -a 256 "$file" > "$file.sha256"
+          done
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: vicaya-installers
+          path: dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.pkg
+            dist/*.sha256
+          generate_release_notes: true

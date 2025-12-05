@@ -2,7 +2,7 @@
 
 mod ipc_client;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
 use vicaya_core::ipc::{Request, Response};
@@ -14,8 +14,12 @@ use crate::ipc_client::IpcClient;
 #[derive(Parser)]
 #[command(name = "vicaya")]
 #[command(about = "विचय — blazing-fast filesystem search for macOS", long_about = None)]
-#[command(version)]
+#[command(disable_version_flag = true)]
 struct Cli {
+    /// Show version information and exit
+    #[arg(short = 'V', long = "version", action = ArgAction::SetTrue)]
+    version: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -79,6 +83,14 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    if cli.version {
+        println!(
+            "{}",
+            vicaya_core::build_info::BUILD_INFO.version_line("vicaya")
+        );
+        return Ok(());
+    }
+
     match cli.command {
         Some(Commands::Init { force }) => {
             init_config(force)?;
@@ -100,7 +112,10 @@ fn main() -> Result<()> {
             daemon_command(action)?;
         }
         None => {
-            println!("vicaya v{}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "{}",
+                vicaya_core::build_info::BUILD_INFO.version_line("vicaya")
+            );
             println!("Use --help for usage information");
         }
     }
