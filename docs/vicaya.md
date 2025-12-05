@@ -742,6 +742,8 @@ Run hooks manually if needed:
 lefthook run pre-push
 ```
 
+To keep it automatic, our Makefile runs `lefthook install` via `make hooks`, and `make ci` (and the default `make` target) depends on that. If `lefthook` isn’t installed, it will warn and continue; install it to enable the hook.
+
 #### GitHub Actions Workflow
 
 ```yaml
