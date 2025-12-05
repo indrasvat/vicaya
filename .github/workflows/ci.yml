@@ -23,7 +23,7 @@ jobs:
           components: rustfmt
 
       - name: Cargo fmt --check
-        run: cargo fmt --all -- --check
+        run: make fmt-check
 
   lint:
     name: Clippy
