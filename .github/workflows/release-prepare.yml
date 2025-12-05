@@ -1,0 +1,46 @@
+name: Release Prepare
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Semver level (patch, minor, major)"
+        required: true
+        default: "patch"
+      dry_run:
+        description: "Run cargo release in dry-run mode"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  cargo-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-release
+        run: cargo install cargo-release
+
+      - name: Configure git user
+        run: |
+          git config user.name "vicaya release bot"
+          git config user.email "releases@indrasvat.dev"
+
+      - name: Run cargo release
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          LEVEL: ${{ github.event.inputs.level }}
+        run: |
+          if [[ "$DRY_RUN" == "true" ]]; then
+            cargo release "$LEVEL" --workspace --no-publish --execute --dry-run
+          else
+            cargo release "$LEVEL" --workspace --no-publish --execute
+          fi

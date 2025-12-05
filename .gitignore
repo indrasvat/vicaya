@@ -28,3 +28,4 @@ hyperfine*
 
 # Local working documents
 TUI_IMPLEMENTATION_GUIDE.md
+.local/

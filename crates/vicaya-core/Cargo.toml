@@ -20,3 +20,6 @@ libc = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[build-dependencies]
+chrono = { workspace = true }

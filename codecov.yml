@@ -16,6 +16,15 @@ coverage:
       default:
         target: 70%
         threshold: 5%
+       non_code:
+         informational: true
+         paths:
+           - "docs/**"
+           - ".github/**"
+           - "scripts/**"
+           - "config/**"
+           - "AGENTS.md"
+           - "README.md"
 
 comment:
   layout: "reach,diff,flags,tree"
