@@ -712,30 +712,35 @@ ci: fmt lint test build
 	@echo "CI pipeline complete ✅"
 ```
 
-#### Git Hooks (pre-push)
+#### Git Hooks (Lefthook)
 
-**Automatic Rust-native hook installation** via build script:
+We use [Lefthook](https://github.com/evilmartians/lefthook) for local git hooks.
 
-The pre-push hook is automatically installed when developers run `cargo build` for the first time. No manual setup required!
-
-**Hook script** (`.cargo-husky/hooks/pre-push`):
+Setup (once per checkout):
 ```bash
-#!/bin/sh
-set -e
-echo "Running pre-push checks..."
-make fmt
-make lint
-make test
-echo "✅ All pre-push checks passed!"
+# Install lefthook (choose one)
+brew install lefthook           # macOS/Homebrew
+# or
+cargo install lefthook
+
+# Install hooks into .git/hooks
+lefthook install
 ```
 
-**How it works:**
-- `crates/vicaya-core/build.rs` automatically copies the hook to `.git/hooks/pre-push`
-- Sets executable permissions on Unix systems
-- Runs on every `cargo build` but only updates if changed
-- Developers get the hook automatically - zero manual configuration
+Hook config lives in `lefthook.yml`. The pre-push hook runs the same checks as CI:
+```yaml
+pre-push:
+  commands:
+    ci:
+      run: make ci   # fmt-check + lint + test + build
+      env:
+        CARGO_TERM_COLOR: always
+```
 
-The hook runs before every `git push`, ensuring code is formatted, linted, and tested.
+Run hooks manually if needed:
+```bash
+lefthook run pre-push
+```
 
 #### GitHub Actions Workflow
 
@@ -1614,4 +1619,3 @@ This section summarizes chosen crates and rationale for agents.
 - 7 files, 391 insertions, 80 deletions
 
 **Total**: 2 commits, 3,077 net lines added
-
