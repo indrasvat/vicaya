@@ -84,7 +84,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.version {
-        println!("{}", vicaya_core::build_info::BUILD_INFO.version_line("vicaya"));
+        println!(
+            "{}",
+            vicaya_core::build_info::BUILD_INFO.version_line("vicaya")
+        );
         return Ok(());
     }
 
@@ -109,7 +112,10 @@ fn main() -> Result<()> {
             daemon_command(action)?;
         }
         None => {
-            println!("{}", vicaya_core::build_info::BUILD_INFO.version_line("vicaya"));
+            println!(
+                "{}",
+                vicaya_core::build_info::BUILD_INFO.version_line("vicaya")
+            );
             println!("Use --help for usage information");
         }
     }
