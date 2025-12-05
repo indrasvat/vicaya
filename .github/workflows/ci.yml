@@ -121,6 +121,7 @@ jobs:
         with:
           files: lcov.info
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Export coverage summary
         run: cargo llvm-cov --workspace --summary-only > coverage-summary.txt
