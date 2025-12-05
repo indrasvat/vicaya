@@ -1,4 +1,4 @@
-.PHONY: help all build test lint fmt check ci bench clean install-dev install daemon-start daemon-stop daemon-dev tui tui-dev run dev
+.PHONY: help all build test lint fmt fmt-check check ci bench clean install-dev install daemon-start daemon-stop daemon-dev tui tui-dev run dev
 
 .DEFAULT_GOAL := help
 
@@ -24,11 +24,15 @@ lint: ## Run clippy lints
 	@echo "Running clippy..."
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-fmt: ## Format code with rustfmt
+fmt: ## Format code with rustfmt (writes changes)
 	@echo "Formatting code..."
 	cargo fmt --all
 
-check: fmt lint test ## Run fmt + lint + test
+fmt-check: ## Check formatting without writing changes
+	@echo "Checking formatting..."
+	cargo fmt --all -- --check
+
+check: fmt-check lint test ## Run fmt-check + lint + test
 
 bench: ## Run benchmarks
 	@echo "Running benchmarks..."
@@ -131,5 +135,5 @@ dev: build daemon-dev ## Build, start daemon, and launch TUI (no install needed)
 	@echo "Launching vicaya TUI (dev mode)..."
 	@cargo run --package vicaya-tui --release
 
-ci: fmt lint test build ## Run CI pipeline (same as 'all')
+ci: fmt-check lint test build ## Run CI pipeline (same as 'all')
 	@echo "CI pipeline complete ✅"
