@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -14,7 +14,7 @@ fn main() {
         .expect("workspace root")
         .to_path_buf();
 
-    install_pre_push_hook(&repo_root);
+    install_pre_push_hook(repo_root.as_path());
 
     let git_sha = Command::new("git")
         .args([
@@ -40,7 +40,7 @@ fn main() {
     println!("cargo:rustc-env=VICAYA_BUILD_TARGET={target}");
 }
 
-fn install_pre_push_hook(repo_root: &PathBuf) {
+fn install_pre_push_hook(repo_root: &Path) {
     let hook_source = repo_root.join(".cargo-husky/hooks/pre-push");
     let hook_dest = repo_root.join(".git/hooks/pre-push");
 
