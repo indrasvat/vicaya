@@ -1,8 +1,0 @@
-#!/bin/sh
-# Pre-push hook for vicaya
-# Runs full CI pipeline (fmt + lint + test + build) before allowing push
-
-set -e
-
-echo "Running pre-push CI checks..."
-make ci
