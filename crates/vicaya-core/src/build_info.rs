@@ -29,7 +29,3 @@ impl BuildInfo {
         )
     }
 }
-
-pub fn version_string(binary_name: &str) -> String {
-    BUILD_INFO.version_line(binary_name)
-}

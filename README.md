@@ -16,7 +16,8 @@ vicaya is a macOS-native filesystem search tool inspired by "Everything" on Wind
 
 ## Status
 
-**Current Version**: 0.2.0
+**Current Version**: 0.2.0  
+_Keep this in sync with Cargo.toml during releases._
 **Status**: Under Active Development (Phase 1 Complete)
 
 Latest coverage report: [Codecov dashboard](https://codecov.io/gh/indrasvat/vicaya).
@@ -190,6 +191,8 @@ CI artifacts are currently unsigned, so macOS adds a quarantine flag when you do
 ```bash
 xattr -dr com.apple.quarantine /Users/you/Downloads/vicaya-aarch64-apple-darwin-binaries
 ```
+
+**Note:** Replace `/Users/you/Downloads/vicaya-aarch64-apple-darwin-binaries` with the actual path where you downloaded the artifact.
 
 After clearing the attribute you can run `./vicaya --version`, `./vicaya-daemon --version`, etc. This cannot be automated in CI because Gatekeeper attaches the flag on the downloader’s machine; the long-term fix is to codesign/notarize artifacts once a Developer ID certificate is available.
 

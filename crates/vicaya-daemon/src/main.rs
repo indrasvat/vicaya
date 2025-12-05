@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
         println!(
             "{}",
-            vicaya_core::build_info::version_string("vicaya-daemon")
+            vicaya_core::build_info::BUILD_INFO.version_line("vicaya-daemon")
         );
         return Ok(());
     }
