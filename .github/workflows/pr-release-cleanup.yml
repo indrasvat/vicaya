@@ -1,0 +1,38 @@
+name: PR Release Cleanup
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete old PR preview releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Get current time in seconds since epoch
+          NOW=$(date +%s)
+          SEVEN_DAYS_AGO=$((NOW - 7 * 24 * 60 * 60))
+
+          # List all prereleases with pr- prefix and process them
+          gh release list --repo "$GH_REPO" --json tagName,createdAt,isPrerelease --limit 100 | \
+            jq -r '.[] | select(.isPrerelease and (.tagName | startswith("pr-"))) | "\(.tagName)\t\(.createdAt)"' | \
+          while IFS=$'\t' read -r TAG CREATED; do
+            # Convert ISO 8601 date to epoch seconds
+            CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$CREATED" +%s 2>/dev/null || echo 0)
+
+            if [ "$CREATED_TS" -lt "$SEVEN_DAYS_AGO" ] && [ "$CREATED_TS" -gt 0 ]; then
+              echo "Deleting expired release: $TAG (created: $CREATED)"
+              gh release delete "$TAG" --repo "$GH_REPO" --yes || true
+              gh api --method DELETE "/repos/${GH_REPO}/git/refs/tags/$TAG" || true
+            else
+              echo "Keeping release: $TAG (created: $CREATED)"
+            fi
+          done
