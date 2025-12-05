@@ -44,20 +44,13 @@ fn install_pre_push_hook(repo_root: &PathBuf) {
     let hook_source = repo_root.join(".cargo-husky/hooks/pre-push");
     let hook_dest = repo_root.join(".git/hooks/pre-push");
 
-    println!(
-        "cargo:rerun-if-changed={}",
-        hook_source.to_string_lossy()
-    );
+    println!("cargo:rerun-if-changed={}", hook_source.to_string_lossy());
 
     if !hook_source.exists() {
         return;
     }
 
-    if !hook_dest
-        .parent()
-        .map(|p| p.exists())
-        .unwrap_or(false)
-    {
+    if !hook_dest.parent().map(|p| p.exists()).unwrap_or(false) {
         return;
     }
 
