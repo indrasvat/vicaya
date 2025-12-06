@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/indrasvat/vicaya/compare/v1.0.0...v1.0.1) (2025-12-06)
+
+
+### Bug Fixes
+
+* **ci:** build artifacts within semantic-release workflow ([#7](https://github.com/indrasvat/vicaya/issues/7)) ([b4a9f60](https://github.com/indrasvat/vicaya/commit/b4a9f60e2ef856bccf6feb96da7ff274c116df78))
+
 # 1.0.0 (2025-12-06)
 
 
