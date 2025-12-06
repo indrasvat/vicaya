@@ -32,3 +32,6 @@ TUI_IMPLEMENTATION_GUIDE.md
 
 # Node.js (for semantic-release only)
 node_modules/
+
+# Release artifacts
+/artifacts/
