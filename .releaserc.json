@@ -7,7 +7,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "./scripts/set-version.sh ${nextRelease.version}"
+        "prepareCmd": "./scripts/set-version.sh ${nextRelease.version} && ./scripts/build-release.sh"
       }
     ],
     [
@@ -20,6 +20,10 @@
     [
       "@semantic-release/github",
       {
+        "assets": [
+          { "path": "artifacts/*.tar.gz", "label": "vicaya macOS universal binary (tar.gz)" },
+          { "path": "artifacts/*.sha256", "label": "SHA256 checksums" }
+        ],
         "successComment": false,
         "failComment": false
       }
