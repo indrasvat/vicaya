@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error, info};
 use vicaya_core::ipc::{Request, Response};
@@ -21,7 +22,9 @@ pub struct DaemonState {
     pub journal_file: PathBuf,
     pub snapshot: IndexSnapshot,
     pub path_to_id: std::collections::HashMap<String, FileId>,
+    pub inode_to_id: std::collections::HashMap<(u64, u64), FileId>,
     pub last_updated: i64,
+    pub reconciling: bool,
 }
 
 impl DaemonState {
@@ -32,6 +35,7 @@ impl DaemonState {
         snapshot: IndexSnapshot,
     ) -> Self {
         let path_to_id = build_path_map(&snapshot);
+        let inode_to_id = build_inode_map(&snapshot);
         let last_updated = index_file
             .metadata()
             .and_then(|m| m.modified())
@@ -46,7 +50,9 @@ impl DaemonState {
             journal_file,
             snapshot,
             path_to_id,
+            inode_to_id,
             last_updated,
+            reconciling: false,
         }
     }
 
@@ -115,10 +121,20 @@ impl DaemonState {
             ino,
         };
 
+        let inode_key = (dev, ino);
+
         if let Some(&file_id) = self.path_to_id.get(&path_str) {
             let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
                 return;
             };
+
+            let old_inode_key = (meta.dev, meta.ino);
+            if old_inode_key != inode_key {
+                if self.inode_to_id.get(&old_inode_key) == Some(&file_id) {
+                    self.inode_to_id.remove(&old_inode_key);
+                }
+                self.inode_to_id.insert(inode_key, file_id);
+            }
 
             let old_name = self
                 .snapshot
@@ -132,10 +148,38 @@ impl DaemonState {
             }
 
             *meta = new_meta;
+        } else if let Some(&file_id) = self.inode_to_id.get(&inode_key) {
+            // Same inode (dev+ino) already exists in the index under a different path; treat this
+            // as a move/rename even if the watcher didn't report the old path.
+            if let Some(meta) = self.snapshot.file_table.get_mut(file_id) {
+                if let Some(old_path) = self
+                    .snapshot
+                    .string_arena
+                    .get(meta.path_offset, meta.path_len)
+                    .map(|s| s.to_string())
+                {
+                    self.path_to_id.remove(&old_path);
+                }
+
+                let old_name = self
+                    .snapshot
+                    .string_arena
+                    .get(meta.name_offset, meta.name_len)
+                    .unwrap_or("");
+
+                if old_name != name_str {
+                    self.snapshot.trigram_index.remove_text(file_id, old_name);
+                    self.snapshot.trigram_index.add(file_id, &name_str);
+                }
+
+                *meta = new_meta;
+                self.path_to_id.insert(path_str, file_id);
+            }
         } else {
             let file_id = self.snapshot.file_table.insert(new_meta);
             self.snapshot.trigram_index.add(file_id, &name_str);
             self.path_to_id.insert(path_str, file_id);
+            self.inode_to_id.insert(inode_key, file_id);
         }
 
         self.last_updated = now_epoch_seconds();
@@ -154,6 +198,11 @@ impl DaemonState {
         let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
             return;
         };
+
+        let inode_key = (meta.dev, meta.ino);
+        if inode_key != (0, 0) && self.inode_to_id.get(&inode_key) == Some(&file_id) {
+            self.inode_to_id.remove(&inode_key);
+        }
 
         let old_name = self
             .snapshot
@@ -220,6 +269,8 @@ impl DaemonState {
             return;
         };
 
+        let old_inode_key = (meta.dev, meta.ino);
+
         let old_name = self
             .snapshot
             .string_arena
@@ -242,6 +293,16 @@ impl DaemonState {
         meta.mtime = mtime;
         meta.dev = dev;
         meta.ino = ino;
+
+        let new_inode_key = (dev, ino);
+        if old_inode_key != new_inode_key {
+            if self.inode_to_id.get(&old_inode_key) == Some(&file_id) {
+                self.inode_to_id.remove(&old_inode_key);
+            }
+            self.inode_to_id.insert(new_inode_key, file_id);
+        } else {
+            self.inode_to_id.insert(new_inode_key, file_id);
+        }
 
         self.path_to_id.insert(to_str, file_id);
         self.last_updated = now_epoch_seconds();
@@ -268,17 +329,159 @@ fn build_path_map(snapshot: &IndexSnapshot) -> std::collections::HashMap<String,
     map
 }
 
+fn build_inode_map(snapshot: &IndexSnapshot) -> std::collections::HashMap<(u64, u64), FileId> {
+    let mut map = std::collections::HashMap::with_capacity(snapshot.file_table.len());
+    for (file_id, meta) in snapshot.file_table.iter() {
+        if meta.path_len == 0 {
+            continue;
+        }
+        if meta.dev == 0 && meta.ino == 0 {
+            continue;
+        }
+        map.insert((meta.dev, meta.ino), file_id);
+    }
+    map
+}
+
+fn journal_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+fn read_journal_from_offset(path: &Path, offset: u64) -> Vec<IndexUpdate> {
+    use std::io::Seek;
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+
+    let mut reader = BufReader::new(file);
+    if offset > 0 {
+        let _ = reader.seek(std::io::SeekFrom::Start(offset));
+    }
+
+    let mut updates = Vec::new();
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Failed to read journal line: {}", e);
+                continue;
+            }
+        };
+
+        match serde_json::from_str::<IndexUpdate>(&line) {
+            Ok(update) => updates.push(update),
+            Err(e) => error!("Skipping invalid journal entry: {}", e),
+        }
+    }
+
+    updates
+}
+
+fn truncate_journal(path: &Path) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)?;
+    file.flush()?;
+    Ok(())
+}
+
+pub fn full_rebuild_from_disk(
+    state: &SharedState,
+    journal_lock: &Arc<Mutex<()>>,
+    rebuild_lock: &Arc<Mutex<()>>,
+) -> Result<usize> {
+    let _rebuild_guard = rebuild_lock.lock().unwrap();
+
+    {
+        let mut state = state.write().unwrap();
+        state.reconciling = true;
+    }
+
+    let result = (|| {
+        let (config, index_file, journal_file) = {
+            let state = state.read().unwrap();
+            (
+                state.config.clone(),
+                state.index_file.clone(),
+                state.journal_file.clone(),
+            )
+        };
+
+        let journal_offset = {
+            let _guard = journal_lock.lock().unwrap();
+            journal_len(&journal_file)
+        };
+
+        info!("Starting full index rebuild from disk...");
+        let scanner = Scanner::new(config);
+        let snapshot = scanner.scan()?;
+        let files_indexed = snapshot.file_table.len();
+
+        // Finalize: swap snapshot, apply any watcher updates that happened during the scan,
+        // then persist a fresh snapshot and clear the journal.
+        {
+            let mut state = state.write().unwrap();
+            let _journal_guard = journal_lock.lock().unwrap();
+
+            let updates = read_journal_from_offset(&journal_file, journal_offset);
+
+            state.snapshot = snapshot;
+            state.path_to_id = build_path_map(&state.snapshot);
+            state.inode_to_id = build_inode_map(&state.snapshot);
+            state.last_updated = now_epoch_seconds();
+
+            for update in updates {
+                state.apply_update(update);
+            }
+
+            state.snapshot.save(&index_file)?;
+            truncate_journal(&journal_file)?;
+
+            state.reconciling = false;
+        }
+
+        info!("Full rebuild complete: {} files indexed", files_indexed);
+
+        Ok(files_indexed)
+    })();
+
+    if result.is_err() {
+        let mut state = state.write().unwrap();
+        state.reconciling = false;
+    }
+
+    result
+}
+
 /// IPC server that handles client connections.
 pub struct IpcServer {
     listener: UnixListener,
     state: SharedState,
     shutdown: Arc<AtomicBool>,
     socket_path: PathBuf,
+    journal_lock: Arc<Mutex<()>>,
+    rebuild_lock: Arc<Mutex<()>>,
 }
 
 impl IpcServer {
     /// Create a new IPC server.
-    pub fn new(socket_path: &Path, state: SharedState, shutdown: Arc<AtomicBool>) -> Result<Self> {
+    pub fn new(
+        socket_path: &Path,
+        state: SharedState,
+        shutdown: Arc<AtomicBool>,
+        journal_lock: Arc<Mutex<()>>,
+        rebuild_lock: Arc<Mutex<()>>,
+    ) -> Result<Self> {
         // If a socket exists and is connectable, assume another daemon is already running.
         if socket_path.exists() {
             match UnixStream::connect(socket_path) {
@@ -313,6 +516,8 @@ impl IpcServer {
             state,
             shutdown,
             socket_path: socket_path.to_path_buf(),
+            journal_lock,
+            rebuild_lock,
         })
     }
 
@@ -401,46 +606,33 @@ impl IpcServer {
                     trigram_count: state.snapshot.trigram_index.trigram_count(),
                     arena_size: state.snapshot.string_arena.size(),
                     last_updated: state.last_updated,
+                    reconciling: state.reconciling,
                 }
             }
             Request::Rebuild { dry_run } => {
-                let config = { self.state.read().unwrap().config.clone() };
-                let index_file = { self.state.read().unwrap().index_file.clone() };
-                let journal_file = { self.state.read().unwrap().journal_file.clone() };
-
-                let scanner = Scanner::new(config.clone());
-                let snapshot = match scanner.scan() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Rebuild failed: {}", e);
-                        return Response::Error {
-                            message: format!("Rebuild failed: {}", e),
-                        };
-                    }
-                };
-
-                let files_indexed = snapshot.file_table.len();
-
                 if dry_run {
+                    let config = { self.state.read().unwrap().config.clone() };
+                    let scanner = Scanner::new(config);
+                    let snapshot = match scanner.scan() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("Rebuild failed: {}", e);
+                            return Response::Error {
+                                message: format!("Rebuild failed: {}", e),
+                            };
+                        }
+                    };
+
+                    let files_indexed = snapshot.file_table.len();
                     return Response::RebuildComplete { files_indexed };
                 }
 
-                if let Err(e) = snapshot.save(&index_file) {
-                    error!("Failed to save rebuilt index: {}", e);
-                    return Response::Error {
-                        message: format!("Failed to save rebuilt index: {}", e),
-                    };
+                match full_rebuild_from_disk(&self.state, &self.journal_lock, &self.rebuild_lock) {
+                    Ok(files_indexed) => Response::RebuildComplete { files_indexed },
+                    Err(e) => Response::Error {
+                        message: format!("Rebuild failed: {}", e),
+                    },
                 }
-
-                // Clear journal after a successful full rebuild.
-                let _ = std::fs::remove_file(&journal_file);
-
-                let mut state = self.state.write().unwrap();
-                state.snapshot = snapshot;
-                state.path_to_id = build_path_map(&state.snapshot);
-                state.last_updated = now_epoch_seconds();
-
-                Response::RebuildComplete { files_indexed }
             }
             Request::Shutdown => {
                 info!("Shutdown requested");

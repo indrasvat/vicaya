@@ -31,6 +31,9 @@ pub enum Response {
         trigram_count: usize,
         arena_size: usize,
         last_updated: i64,
+        /// Whether the daemon is currently rebuilding/reconciling the index.
+        #[serde(default)]
+        reconciling: bool,
     },
     /// Rebuild completed.
     RebuildComplete { files_indexed: usize },
@@ -138,6 +141,7 @@ mod tests {
             trigram_count: 500,
             arena_size: 2048,
             last_updated: 1234567890,
+            reconciling: false,
         };
         let json = status.to_json().unwrap();
         let decoded = Response::from_json(&json).unwrap();

@@ -133,17 +133,20 @@ fn search(query: &str, limit: usize, format: &str) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
-    let mut client = IpcClient::connect()?;
-
     let request = Request::Search {
         query: query.to_string(),
         limit,
     };
 
-    let response = client.request(&request)?;
+    let response = IpcClient::connect()?.request(&request)?;
 
     match response {
-        Response::SearchResults { results } => {
+        Response::SearchResults { mut results } => {
+            if results.is_empty() {
+                if let Some(retry) = wait_for_reconcile_and_retry(&request, format)? {
+                    results = retry;
+                }
+            }
             match format {
                 "json" => {
                     println!("{}", serde_json::to_string_pretty(&results).unwrap());
@@ -181,6 +184,45 @@ fn search(query: &str, limit: usize, format: &str) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn wait_for_reconcile_and_retry(
+    search_request: &Request,
+    format: &str,
+) -> Result<Option<Vec<vicaya_core::ipc::SearchResult>>> {
+    use std::time::{Duration, Instant};
+
+    let reconciling = match IpcClient::connect()?.request(&Request::Status)? {
+        Response::Status { reconciling, .. } => reconciling,
+        _ => return Ok(None),
+    };
+
+    if !reconciling {
+        return Ok(None);
+    }
+
+    if format != "json" {
+        eprintln!("Index is reconciling; waiting for results...");
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+
+    while Instant::now() < deadline {
+        let reconciling = match IpcClient::connect()?.request(&Request::Status)? {
+            Response::Status { reconciling, .. } => reconciling,
+            _ => false,
+        };
+        if !reconciling {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    let Response::SearchResults { results } = IpcClient::connect()?.request(search_request)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(results))
 }
 
 fn rebuild(dry_run: bool) -> Result<()> {
@@ -244,6 +286,7 @@ fn status(format: &str) -> Result<()> {
             trigram_count,
             arena_size,
             last_updated,
+            reconciling,
         } => {
             if format == "json" {
                 // JSON output
@@ -257,6 +300,7 @@ fn status(format: &str) -> Result<()> {
                         "trigrams": trigram_count,
                         "arena_bytes": arena_size,
                         "last_updated": last_updated,
+                        "reconciling": reconciling,
                     },
                     "metrics": {
                         "bytes_per_file": if indexed_files > 0 { arena_size / indexed_files } else { 0 },
@@ -299,6 +343,22 @@ fn status(format: &str) -> Result<()> {
                     daemon_line,
                     "│".bright_blue()
                 );
+
+                if reconciling {
+                    let status_str = "running";
+                    let plain_line = format!("    Reconciliation: {:<33}", status_str);
+                    assert_eq!(plain_line.len(), 53);
+                    let status_line = format!("{:<33}", status_str)
+                        .bright_yellow()
+                        .bold()
+                        .to_string();
+                    println!(
+                        "{}     Reconciliation: {} {}",
+                        "│".bright_blue(),
+                        status_line,
+                        "│".bright_blue()
+                    );
+                }
 
                 let pid_str = pid.to_string();
                 let plain_line = format!("    PID: {:<44}", pid_str);
@@ -543,10 +603,14 @@ fn daemon_command(action: DaemonAction) -> Result<()> {
                         trigram_count,
                         arena_size,
                         last_updated,
+                        reconciling,
                     }) = client.request(&request)
                     {
                         println!("\nIndex Status:");
                         println!("  PID: {}", pid);
+                        if reconciling {
+                            println!("  Reconciliation: running");
+                        }
                         println!("  Files indexed: {}", indexed_files);
                         println!("  Trigrams: {}", trigram_count);
                         println!("  Arena size: {} bytes", arena_size);

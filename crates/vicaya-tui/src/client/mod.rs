@@ -74,11 +74,13 @@ impl IpcClient {
                 trigram_count,
                 arena_size,
                 last_updated,
+                reconciling,
             } => Ok(DaemonStatus {
                 indexed_files,
                 trigram_count,
                 arena_size,
                 last_updated,
+                reconciling,
             }),
             Response::Error { message } => Err(anyhow::anyhow!("Status error: {}", message)),
             _ => Err(anyhow::anyhow!("Unexpected response")),
@@ -154,4 +156,5 @@ pub struct DaemonStatus {
     pub trigram_count: usize,
     pub arena_size: usize,
     pub last_updated: i64,
+    pub reconciling: bool,
 }
