@@ -69,6 +69,7 @@ impl IpcClient {
 
         match self.request(&req)? {
             Response::Status {
+                pid: _,
                 indexed_files,
                 trigram_count,
                 arena_size,

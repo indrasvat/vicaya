@@ -1,13 +1,14 @@
 //! vicaya-watcher: FSEvents-based file watcher.
 
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver};
 use tracing::{debug, info};
 use vicaya_core::Result;
 
 /// Events that update the index.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IndexUpdate {
     /// A new file was created.
     Create { path: String },
@@ -52,43 +53,64 @@ impl FileWatcher {
 
         while let Ok(Ok(event)) = self.receiver.try_recv() {
             debug!("File event: {:?}", event);
-            if let Some(update) = self.event_to_update(event) {
-                updates.push(update);
-            }
+            updates.extend(self.event_to_updates(event));
         }
 
         updates
     }
 
-    /// Convert a notify event to an index update.
-    fn event_to_update(&self, event: Event) -> Option<IndexUpdate> {
+    /// Convert a notify event to index updates.
+    fn event_to_updates(&self, event: Event) -> Vec<IndexUpdate> {
+        use notify::event::{ModifyKind, RenameMode};
         use notify::EventKind;
 
         match event.kind {
-            EventKind::Create(_) => {
-                let path = event.paths.first()?.to_string_lossy().to_string();
-                Some(IndexUpdate::Create { path })
-            }
-            EventKind::Modify(_) => {
-                let path = event.paths.first()?.to_string_lossy().to_string();
-                Some(IndexUpdate::Modify { path })
-            }
-            EventKind::Remove(_) => {
-                let path = event.paths.first()?.to_string_lossy().to_string();
-                Some(IndexUpdate::Delete { path })
-            }
-            EventKind::Any => {
-                // Handle rename/move events
+            EventKind::Create(_) => event
+                .paths
+                .into_iter()
+                .map(|p| IndexUpdate::Create {
+                    path: p.to_string_lossy().to_string(),
+                })
+                .collect(),
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
                 if event.paths.len() == 2 {
-                    Some(IndexUpdate::Move {
+                    vec![IndexUpdate::Move {
                         from: event.paths[0].to_string_lossy().to_string(),
                         to: event.paths[1].to_string_lossy().to_string(),
-                    })
+                    }]
                 } else {
-                    None
+                    Vec::new()
                 }
             }
-            _ => None,
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)) => event
+                .paths
+                .into_iter()
+                .map(|p| IndexUpdate::Delete {
+                    path: p.to_string_lossy().to_string(),
+                })
+                .collect(),
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)) => event
+                .paths
+                .into_iter()
+                .map(|p| IndexUpdate::Create {
+                    path: p.to_string_lossy().to_string(),
+                })
+                .collect(),
+            EventKind::Modify(_) => event
+                .paths
+                .into_iter()
+                .map(|p| IndexUpdate::Modify {
+                    path: p.to_string_lossy().to_string(),
+                })
+                .collect(),
+            EventKind::Remove(_) => event
+                .paths
+                .into_iter()
+                .map(|p| IndexUpdate::Delete {
+                    path: p.to_string_lossy().to_string(),
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 }

@@ -6,12 +6,7 @@ use std::process::Command;
 
 /// Get the PID file path for the daemon.
 pub fn pid_file_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home)
-        .join("Library")
-        .join("Application Support")
-        .join("vicaya")
-        .join("daemon.pid")
+    crate::paths::pid_file_path()
 }
 
 /// Check if the daemon is currently running.
@@ -19,7 +14,7 @@ pub fn is_running() -> bool {
     let pid_file = pid_file_path();
 
     if !pid_file.exists() {
-        return false;
+        return is_socket_connectable();
     }
 
     // Read PID from file
@@ -35,14 +30,19 @@ pub fn is_running() -> bool {
     #[cfg(unix)]
     {
         // Send signal 0 to check if process exists without killing it
-        unsafe { libc::kill(pid, 0) == 0 }
+        let running = unsafe { libc::kill(pid, 0) == 0 };
+        if running {
+            return true;
+        }
     }
 
-    #[cfg(not(unix))]
-    {
-        // Fallback for non-Unix systems (not fully supported)
-        false
+    // If PID file exists but process does not, consider it stale and fall back to socket check.
+    // If the socket isn't connectable either, remove the stale PID file.
+    let socket_ok = is_socket_connectable();
+    if !socket_ok {
+        let _ = remove_pid_file();
     }
+    socket_ok
 }
 
 /// Get the PID of the running daemon, if any.
@@ -111,7 +111,13 @@ pub fn start_daemon() -> crate::Result<i32> {
             .map_err(crate::Error::Io)?;
 
         let pid = child.id() as i32;
-        write_pid(pid).map_err(crate::Error::Io)?;
+
+        wait_for_daemon_ready(pid)?;
+
+        // Ensure PID file exists for consumers that rely on it.
+        if !pid_file_path().exists() {
+            write_pid(pid).map_err(crate::Error::Io)?;
+        }
 
         Ok(pid)
     }
@@ -130,32 +136,128 @@ pub fn stop_daemon() -> crate::Result<()> {
         return Err(crate::Error::Config("Daemon is not running".to_string()));
     }
 
-    let pid =
-        get_pid().ok_or_else(|| crate::Error::Config("Could not read daemon PID".to_string()))?;
+    // Try a graceful shutdown via IPC first.
+    let _ = request_shutdown_via_ipc();
+
+    let pid = get_pid();
 
     #[cfg(unix)]
     {
-        // Send SIGTERM to daemon
-        unsafe {
-            if libc::kill(pid, libc::SIGTERM) != 0 {
-                return Err(crate::Error::Config(
-                    "Failed to send termination signal to daemon".to_string(),
-                ));
-            }
-        }
-
-        // Wait for daemon to shut down (with timeout)
+        // Wait for daemon to shut down (with timeout).
+        // Prefer PID-based checks if we have one; otherwise fall back to socket connectivity.
         for _ in 0..50 {
-            if !is_running() {
-                remove_pid_file().map_err(crate::Error::Io)?;
+            if let Some(pid) = pid {
+                if unsafe { libc::kill(pid, 0) != 0 } {
+                    let _ = remove_pid_file();
+                    return Ok(());
+                }
+            } else if !is_socket_connectable() {
+                let _ = remove_pid_file();
                 return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
+        // Fallback: force terminate if still running and we have a PID.
+        if let Some(pid) = pid {
+            unsafe {
+                if libc::kill(pid, libc::SIGTERM) != 0 {
+                    return Err(crate::Error::Config(
+                        "Failed to send termination signal to daemon".to_string(),
+                    ));
+                }
+            }
+        }
+
+        for _ in 0..50 {
+            if !is_running() {
+                let _ = remove_pid_file();
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        Err(crate::Error::Config("Daemon did not shut down".to_string()))
+    }
+
+    #[cfg(not(unix))]
+    {
         Err(crate::Error::Config(
-            "Daemon did not shut down gracefully".to_string(),
+            "Daemon stop not supported on this platform".to_string(),
         ))
+    }
+}
+
+fn is_socket_connectable() -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixStream;
+        UnixStream::connect(crate::ipc::socket_path()).is_ok()
+    }
+
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn wait_for_daemon_ready(pid: i32) -> crate::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixStream;
+
+        // Wait up to ~2 seconds for the daemon to bind the socket.
+        for _ in 0..40 {
+            // If the process died, bail early.
+            if unsafe { libc::kill(pid, 0) != 0 } {
+                return Err(crate::Error::Config(
+                    "Daemon exited during startup".to_string(),
+                ));
+            }
+
+            if UnixStream::connect(crate::ipc::socket_path()).is_ok() {
+                return Ok(());
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        Err(crate::Error::Config(
+            "Timed out waiting for daemon to become ready".to_string(),
+        ))
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        Err(crate::Error::Config(
+            "Daemon start not supported on this platform".to_string(),
+        ))
+    }
+}
+
+fn request_shutdown_via_ipc() -> crate::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
+
+        let mut stream = UnixStream::connect(crate::ipc::socket_path())
+            .map_err(|e| crate::Error::Ipc(format!("Failed to connect to daemon: {}", e)))?;
+
+        let mut request_json = crate::ipc::Request::Shutdown
+            .to_json()
+            .map_err(|e| crate::Error::Ipc(format!("Failed to serialize request: {}", e)))?;
+        request_json.push('\n');
+
+        stream
+            .write_all(request_json.as_bytes())
+            .map_err(|e| crate::Error::Ipc(format!("Failed to send request: {}", e)))?;
+
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        let _ = reader.read_line(&mut line);
+        Ok(())
     }
 
     #[cfg(not(unix))]
@@ -198,22 +300,36 @@ fn find_daemon_binary() -> crate::Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn with_test_vicaya_dir<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _lock = crate::paths::test_env_lock();
+        let dir = tempfile::tempdir().expect("Should create temp dir");
+        std::env::set_var("VICAYA_DIR", dir.path());
+
+        let result = f(dir.path());
+
+        std::env::remove_var("VICAYA_DIR");
+        result
+    }
+
     #[test]
     fn test_pid_file_path() {
-        let path = pid_file_path();
-        assert!(path.to_string_lossy().contains("vicaya"));
-        assert!(path.to_string_lossy().ends_with("daemon.pid"));
+        with_test_vicaya_dir(|dir| {
+            let path = pid_file_path();
+            assert_eq!(path, dir.join("daemon.pid"));
+        });
     }
 
     #[test]
     fn test_write_and_read_pid() {
-        let test_pid = 12345;
-        write_pid(test_pid).unwrap();
+        with_test_vicaya_dir(|_| {
+            let test_pid = 12345;
+            write_pid(test_pid).unwrap();
 
-        let read_pid = get_pid();
-        assert_eq!(read_pid, Some(test_pid));
+            let read_pid = get_pid();
+            assert_eq!(read_pid, Some(test_pid));
 
-        // Cleanup
-        remove_pid_file().unwrap();
+            // Cleanup
+            remove_pid_file().unwrap();
+        });
     }
 }

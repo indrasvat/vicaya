@@ -102,11 +102,7 @@ impl Config {
 
     /// Get the default index path.
     fn default_index_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("vicaya")
+        crate::paths::vicaya_dir().join("index")
     }
 
     /// Ensure the index directory exists.
