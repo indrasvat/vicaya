@@ -1,10 +1,16 @@
 //! Background worker for daemon IPC and preview loading.
 
 use crate::client::{DaemonStatus, IpcClient};
-use crate::state::ViewKind;
+use crate::state::{StyledLine, StyledSegment, TextKind, TextStyle, ViewKind};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 use vicaya_index::SearchResult;
+
+use syntect::{
+    easy::HighlightLines,
+    highlighting::{FontStyle, Theme, ThemeSet},
+    parsing::SyntaxSet,
+};
 
 pub enum WorkerCommand {
     Search {
@@ -30,7 +36,7 @@ pub enum WorkerEvent {
         id: u64,
         path: String,
         title: String,
-        lines: Vec<String>,
+        lines: Vec<StyledLine>,
         truncated: bool,
     },
     Status {
@@ -48,6 +54,10 @@ pub fn start_worker(
 fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
     let mut client = IpcClient::new();
     let mut last_status_at = Instant::now() - Duration::from_secs(60);
+
+    let syntaxes = SyntaxSet::load_defaults_newlines();
+    let themes = ThemeSet::load_defaults();
+    let theme = pick_theme(&themes);
 
     let mut pending_search: Option<(u64, String, usize, ViewKind)> = None;
     let mut pending_preview: Option<(u64, String)> = None;
@@ -130,7 +140,7 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
         }
 
         if let Some((id, path)) = pending_preview.take() {
-            let (title, lines, truncated, error) = build_preview(&path);
+            let (title, lines, truncated, error) = build_preview(&path, &syntaxes, theme);
             let _ = evt_tx.send(WorkerEvent::PreviewReady {
                 id,
                 path,
@@ -145,7 +155,49 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
     }
 }
 
-fn build_preview(path: &str) -> (String, Vec<String>, bool, Option<String>) {
+fn pick_theme(themes: &ThemeSet) -> &Theme {
+    themes
+        .themes
+        .get("base16-ocean.dark")
+        .or_else(|| themes.themes.get("Monokai Extended"))
+        .or_else(|| themes.themes.get("Solarized (dark)"))
+        .or_else(|| themes.themes.values().next())
+        .expect("syntect theme set must not be empty")
+}
+
+fn meta_line(text: impl Into<String>) -> StyledLine {
+    vec![StyledSegment {
+        text: text.into(),
+        style: TextStyle {
+            kind: TextKind::Meta,
+            ..Default::default()
+        },
+    }]
+}
+
+fn error_line(text: impl Into<String>) -> StyledLine {
+    vec![StyledSegment {
+        text: text.into(),
+        style: TextStyle {
+            kind: TextKind::Error,
+            bold: true,
+            ..Default::default()
+        },
+    }]
+}
+
+fn plain_line(text: impl Into<String>) -> StyledLine {
+    vec![StyledSegment {
+        text: text.into(),
+        style: TextStyle::default(),
+    }]
+}
+
+fn build_preview(
+    path: &str,
+    syntaxes: &SyntaxSet,
+    theme: &Theme,
+) -> (String, Vec<StyledLine>, bool, Option<String>) {
     let p = std::path::Path::new(path);
     let title = p
         .file_name()
@@ -157,7 +209,7 @@ fn build_preview(path: &str) -> (String, Vec<String>, bool, Option<String>) {
         Err(e) => {
             return (
                 title,
-                vec![format!("(unable to read metadata) {}", e)],
+                vec![error_line(format!("(unable to read metadata) {}", e))],
                 false,
                 Some(e.to_string()),
             );
@@ -168,21 +220,21 @@ fn build_preview(path: &str) -> (String, Vec<String>, bool, Option<String>) {
         return preview_dir(p, title);
     }
 
-    preview_file(p, title, meta.len())
+    preview_file(p, title, meta.len(), syntaxes, theme)
 }
 
 fn preview_dir(
     path: &std::path::Path,
     title: String,
-) -> (String, Vec<String>, bool, Option<String>) {
+) -> (String, Vec<StyledLine>, bool, Option<String>) {
     const MAX_ENTRIES: usize = 200;
 
-    let mut lines = vec![format!("{}", path.display()), "".to_string()];
+    let mut lines = vec![meta_line(format!("{}", path.display())), meta_line("")];
 
     let entries = match std::fs::read_dir(path) {
         Ok(e) => e,
         Err(e) => {
-            lines.push(format!("(unable to read directory) {}", e));
+            lines.push(error_line(format!("(unable to read directory) {}", e)));
             return (title, lines, false, Some(e.to_string()));
         }
     };
@@ -207,13 +259,15 @@ fn preview_dir(
             .ok()
             .and_then(|ft| if ft.is_dir() { Some("/") } else { None })
             .unwrap_or("");
-        lines.push(format!("{}{}", name, suffix));
+        lines.push(plain_line(format!("{}{}", name, suffix)));
         shown += 1;
     }
 
     if truncated {
-        lines.push("".to_string());
-        lines.push(format!("… (showing first {MAX_ENTRIES} entries)"));
+        lines.push(meta_line(""));
+        lines.push(meta_line(format!(
+            "… (showing first {MAX_ENTRIES} entries)"
+        )));
     }
 
     (title, lines, truncated, None)
@@ -223,20 +277,22 @@ fn preview_file(
     path: &std::path::Path,
     title: String,
     size: u64,
-) -> (String, Vec<String>, bool, Option<String>) {
+    syntaxes: &SyntaxSet,
+    theme: &Theme,
+) -> (String, Vec<StyledLine>, bool, Option<String>) {
     const MAX_BYTES: usize = 256 * 1024;
     const MAX_LINES: usize = 4000;
 
     let mut lines = vec![
-        format!("{}", path.display()),
-        format!("{} bytes", size),
-        "".to_string(),
+        meta_line(format!("{}", path.display())),
+        meta_line(format!("{} bytes", size)),
+        meta_line(""),
     ];
 
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            lines.push(format!("(unable to open file) {}", e));
+            lines.push(error_line(format!("(unable to open file) {}", e)));
             return (title, lines, false, Some(e.to_string()));
         }
     };
@@ -246,35 +302,100 @@ fn preview_file(
     let read = match file.read(&mut buf) {
         Ok(n) => n,
         Err(e) => {
-            lines.push(format!("(unable to read file) {}", e));
+            lines.push(error_line(format!("(unable to read file) {}", e)));
             return (title, lines, false, Some(e.to_string()));
         }
     };
     buf.truncate(read);
 
     if buf.contains(&0) {
-        lines.push("(binary file preview)".to_string());
+        lines.push(meta_line("(binary file preview)"));
         return (title, lines, true, None);
     }
 
     let text = String::from_utf8_lossy(&buf);
     let mut truncated_lines = false;
 
+    let syntax = find_syntax(path, &text, syntaxes);
+    let mut highlighter = syntax.map(|s| HighlightLines::new(s, theme));
+
     for (i, line) in text.lines().enumerate() {
         if i >= MAX_LINES {
             truncated_lines = true;
             break;
         }
-        lines.push(line.to_string());
+
+        if let Some(ref mut highlighter) = highlighter {
+            match highlighter.highlight_line(line, syntaxes) {
+                Ok(ranges) => {
+                    let mut out = Vec::with_capacity(ranges.len().max(1));
+                    for (style, fragment) in ranges {
+                        if fragment.is_empty() {
+                            continue;
+                        }
+                        out.push(StyledSegment {
+                            text: fragment.to_string(),
+                            style: syntect_style_to_text_style(style),
+                        });
+                    }
+
+                    if out.is_empty() {
+                        lines.push(plain_line(""));
+                    } else {
+                        lines.push(out);
+                    }
+                }
+                Err(_) => {
+                    lines.push(plain_line(line));
+                }
+            }
+        } else {
+            lines.push(plain_line(line));
+        }
     }
 
     let truncated_bytes = read >= MAX_BYTES;
     let truncated = truncated_bytes || truncated_lines;
 
     if truncated {
-        lines.push("".to_string());
-        lines.push("… (preview truncated)".to_string());
+        lines.push(meta_line(""));
+        lines.push(meta_line("… (preview truncated)"));
     }
 
     (title, lines, truncated, None)
+}
+
+fn find_syntax<'a>(
+    path: &std::path::Path,
+    text: &str,
+    syntaxes: &'a SyntaxSet,
+) -> Option<&'a syntect::parsing::SyntaxReference> {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if let Some(syntax) = syntaxes.find_syntax_by_extension(ext) {
+            return Some(syntax);
+        }
+    }
+
+    let first_line = text.lines().next().unwrap_or_default();
+    syntaxes.find_syntax_by_first_line(first_line)
+}
+
+fn syntect_style_to_text_style(style: syntect::highlighting::Style) -> TextStyle {
+    let mut out = TextStyle {
+        kind: TextKind::Normal,
+        fg: Some((style.foreground.r, style.foreground.g, style.foreground.b)),
+        ..Default::default()
+    };
+
+    if style.font_style.contains(FontStyle::BOLD) {
+        out.bold = true;
+    }
+    if style.font_style.contains(FontStyle::ITALIC) {
+        out.italic = true;
+    }
+    if style.font_style.contains(FontStyle::UNDERLINE) {
+        out.underline = true;
+    }
+
+    out
 }

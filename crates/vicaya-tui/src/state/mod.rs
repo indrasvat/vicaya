@@ -397,6 +397,31 @@ impl Default for DrishtiSwitcherState {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextKind {
+    #[default]
+    Normal,
+    Meta,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TextStyle {
+    pub kind: TextKind,
+    pub fg: Option<(u8, u8, u8)>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StyledSegment {
+    pub text: String,
+    pub style: TextStyle,
+}
+
+pub type StyledLine = Vec<StyledSegment>;
+
 /// Preview state for the selected item.
 pub struct PreviewState {
     pub is_visible: bool,
@@ -404,7 +429,7 @@ pub struct PreviewState {
     pub truncated: bool,
     pub path: Option<String>,
     pub title: String,
-    pub lines: Vec<String>,
+    pub lines: Vec<StyledLine>,
     pub scroll: u16,
 }
 

@@ -11,27 +11,31 @@ use ratatui::{
 
 pub fn render_help(f: &mut Frame) {
     let help_text = vec![
-        "vicaya-tui — Drishti / Ksetra quick help",
+        "vicaya-tui — drishti / ksetra quick help",
         "",
         "Core terms:",
-        "  Drishti       View mode (Files, Dirs, …)",
-        "  Prashna       Query input",
-        "  Phala         Results list",
-        "  Purvadarshana Preview pane",
+        "  drishti       View mode (Files, Dirs, …)",
+        "  prashna       Query input",
+        "  phala         Results list",
+        "  purvadarshana Preview pane",
         "",
         "Keys:",
-        "  Tab           Toggle focus (Prashna / Phala)",
-        "  Ctrl+T        Drishti switcher",
-        "  Ctrl+O        Toggle Purvadarshana",
-        "  ↓ (in input)  Move to Phala",
-        "  ↑ (at top)    Move to Prashna",
+        "  Tab           Toggle focus (prashna / phala)",
+        "  Ctrl+T        drishti switcher",
+        "  Ctrl+O        Toggle purvadarshana",
+        "  ↓ (in input)  Move to phala",
+        "  ↑ (at top)    Move to prashna",
         "",
-        "Navigation (Phala):",
+        "Navigation (phala):",
         "  j / ↓         Down",
         "  k / ↑         Up",
         "  g / G         Top / Bottom",
         "",
-        "Actions (Phala):",
+        "Preview (purvadarshana):",
+        "  PgUp / PgDn   Scroll preview",
+        "  Ctrl+U / Ctrl+D  Scroll preview",
+        "",
+        "Actions (phala):",
         "  Enter / o     Open in $EDITOR",
         "  y             Copy path",
         "  p             Print path and exit",
@@ -46,7 +50,8 @@ pub fn render_help(f: &mut Frame) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(ui::PRIMARY))
-                .title(" Help "),
+                .title(" Help ")
+                .style(Style::default().bg(ui::BG_DARK)),
         );
 
     let area = crate::ui::layout::centered_rect(70, 80, f.area());
@@ -98,8 +103,10 @@ pub fn render_drishti_switcher(f: &mut Frame, app: &AppState) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(ui::PRIMARY))
-                .title(" Drishti "),
+                .title(" drishti ")
+                .style(Style::default().bg(ui::BG_DARK)),
         )
+        .style(Style::default().bg(ui::BG_DARK))
         .highlight_style(Style::default().bg(ui::BG_ELEVATED).fg(ui::PRIMARY))
         .highlight_symbol("▸ ");
 

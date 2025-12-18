@@ -15,9 +15,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         Span::styled("Tab:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" focus  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+T:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" Drishti  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled(" drishti  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+O:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" Purvadarshana  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled(" purvadarshana  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("?:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" help  ", Style::default().fg(ui::TEXT_SECONDARY)),
     ];

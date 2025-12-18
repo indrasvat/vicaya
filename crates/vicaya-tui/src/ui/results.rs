@@ -45,9 +45,16 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
             // Truncate path if not selected
             let display_path = truncate_path(dir_path, max_path_len.max(30), is_selected);
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(marker, Style::default().fg(ui::PRIMARY)),
                 Span::raw(" "),
+            ];
+
+            if app.view == crate::state::ViewKind::Sthana {
+                spans.push(Span::styled("📁 ", Style::default().fg(ui::ACCENT)));
+            }
+
+            spans.extend(vec![
                 Span::styled(&result.name, Style::default().fg(ui::TEXT_PRIMARY)),
                 Span::raw(" "),
                 Span::styled(
@@ -61,6 +68,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
                     Style::default().fg(score_color),
                 ),
             ]);
+
+            let line = Line::from(spans);
 
             let style = if is_selected {
                 Style::default().bg(ui::BG_ELEVATED)
@@ -79,19 +88,20 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     };
 
     let title = if app.search.is_searching {
-        format!("Phala ({})  searching…", results.len())
+        format!("phala ({})  searching…", results.len())
     } else {
-        format!("Phala ({})", results.len())
+        format!("phala ({})", results.len())
     };
 
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(title),
+            .title(title)
+            .style(Style::default().bg(ui::BG_SURFACE)),
     );
 
-    f.render_widget(list, area);
+    f.render_widget(list.style(Style::default().bg(ui::BG_SURFACE)), area);
 }
 
 /// Truncate path intelligently for display.

@@ -12,23 +12,31 @@ use ratatui::{
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     let drishti = format!(
-        "Drishti: {} ({})",
+        "drishti  {} ({})",
         app.view.label(),
         app.view.english_hint()
     );
-    let ksetra = "Ksetra: Global";
+    let ksetra = "ksetra  global";
 
-    let (rakshaka, suchi, reconciling) = if let Some(status) = &app.daemon_status {
-        let rakshaka = "Rakshaka: OK".to_string();
-        let suchi = format!("Suchi: {}", status.indexed_files);
-        (rakshaka, suchi, status.reconciling)
-    } else {
-        (
-            "Rakshaka: Offline".to_string(),
-            "Suchi: ?".to_string(),
-            false,
-        )
-    };
+    let (rakshaka_text, rakshaka_color, suchi_text, reconciling) =
+        if let Some(status) = &app.daemon_status {
+            let suchi = format!("suchi  {}", format_count(status.indexed_files));
+            let reconciling = status.reconciling;
+            let rakshaka = "rakshaka  ok";
+            let rakshaka_color = if reconciling {
+                ui::WARNING
+            } else {
+                ui::SUCCESS
+            };
+            (rakshaka.to_string(), rakshaka_color, suchi, reconciling)
+        } else {
+            (
+                "rakshaka  offline".to_string(),
+                ui::ERROR,
+                "suchi  ?".to_string(),
+                false,
+            )
+        };
 
     let mut spans = vec![
         Span::styled(
@@ -38,26 +46,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ", Style::default()),
+        Span::styled("👁 ", Style::default().fg(ui::ACCENT)),
         Span::styled(drishti, Style::default().fg(ui::ACCENT)),
         Span::styled("  ", Style::default()),
+        Span::styled("🧭 ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled(ksetra, Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("  ", Style::default()),
-        Span::styled(
-            rakshaka,
-            Style::default().fg(if app.daemon_status.is_some() {
-                ui::SUCCESS
-            } else {
-                ui::WARNING
-            }),
-        ),
+        Span::styled("🛡 ", Style::default().fg(rakshaka_color)),
+        Span::styled("● ", Style::default().fg(rakshaka_color)),
+        Span::styled(rakshaka_text, Style::default().fg(rakshaka_color)),
         Span::styled("  ", Style::default()),
-        Span::styled(suchi, Style::default().fg(ui::INFO)),
+        Span::styled("🗂 ", Style::default().fg(ui::INFO)),
+        Span::styled(suchi_text, Style::default().fg(ui::INFO)),
     ];
 
     if reconciling {
         spans.push(Span::styled("  ", Style::default()));
         spans.push(Span::styled(
-            "reconciling…",
+            "🔄 reconciling…",
             Style::default()
                 .fg(ui::WARNING)
                 .add_modifier(Modifier::ITALIC),
@@ -72,4 +78,16 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     );
 
     f.render_widget(header, area);
+}
+
+fn format_count(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (count, ch) in s.chars().rev().enumerate() {
+        if count != 0 && count.is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }

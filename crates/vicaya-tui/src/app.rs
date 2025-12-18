@@ -159,7 +159,7 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
 
-        // Re-run the current search when switching Drishti.
+        // Re-run the current search when switching drishti.
         if app.view != last_view {
             last_view = app.view;
             app.search.is_searching = true;
@@ -242,7 +242,7 @@ fn handle_key_event(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
     }
 }
 
-/// Handle keys in Drishti switcher mode.
+/// Handle keys in drishti switcher mode.
 fn handle_drishti_switcher_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
     match (key, modifiers) {
         (KeyCode::Esc, _) => app.toggle_drishti_switcher(),
@@ -260,7 +260,7 @@ fn handle_drishti_switcher_keys(app: &mut AppState, key: KeyCode, modifiers: Key
                 app.toggle_drishti_switcher();
             } else {
                 app.error = Some(format!(
-                    "Drishti '{}' ({}) is coming soon",
+                    "drishti '{}' ({}) is coming soon",
                     selected.label(),
                     selected.english_hint()
                 ));
