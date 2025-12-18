@@ -3,12 +3,14 @@
 use crate::state::AppState;
 use crate::ui;
 use ratatui::{
-    layout::Rect,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
+use vicaya_core::build_info::BUILD_INFO;
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     let mut spans = vec![
@@ -56,6 +58,45 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         ));
     }
 
+    let build_info = format!(" {}", compact_build_info());
+    let build_width = (UnicodeWidthStr::width(build_info.as_str()) as u16).min(area.width);
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(build_width)])
+        .split(area);
+
     let hints = Paragraph::new(Line::from(spans)).style(Style::default().bg(ui::BG_SURFACE));
-    f.render_widget(hints, area);
+    let build = Paragraph::new(build_info)
+        .style(
+            Style::default()
+                .fg(ui::TEXT_MUTED)
+                .bg(ui::BG_SURFACE)
+                .add_modifier(Modifier::DIM),
+        )
+        .alignment(Alignment::Right);
+
+    f.render_widget(hints, chunks[0]);
+    f.render_widget(build, chunks[1]);
+}
+
+fn compact_build_info() -> String {
+    let version = BUILD_INFO.version;
+    let sha = BUILD_INFO.git_sha;
+
+    let mut out = String::with_capacity(version.len() + sha.len().min(7) + 3);
+    out.push('v');
+    out.push_str(version);
+
+    if sha != "unknown" {
+        out.push('@');
+        for (idx, ch) in sha.chars().enumerate() {
+            if idx >= 7 {
+                break;
+            }
+            out.push(ch);
+        }
+    }
+
+    out
 }

@@ -3,13 +3,12 @@
 use crate::state::AppState;
 use crate::ui;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use vicaya_core::build_info::BUILD_INFO;
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     let drishti = format!(
@@ -72,34 +71,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         ));
     }
 
-    let build_info = compact_build_info();
-    let build_width = (build_info.len() as u16).min(area.width.saturating_sub(2));
+    let header = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ui::BORDER_DIM))
+            .style(Style::default().bg(ui::BG_SURFACE)),
+    );
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ui::BORDER_DIM))
-        .style(Style::default().bg(ui::BG_SURFACE));
-    let inner = block.inner(area);
-
-    f.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(build_width)])
-        .split(inner);
-
-    let left = Paragraph::new(Line::from(spans)).style(Style::default().bg(ui::BG_SURFACE));
-    let right = Paragraph::new(build_info)
-        .style(
-            Style::default()
-                .fg(ui::TEXT_MUTED)
-                .bg(ui::BG_SURFACE)
-                .add_modifier(Modifier::DIM),
-        )
-        .alignment(Alignment::Right);
-
-    f.render_widget(left, chunks[0]);
-    f.render_widget(right, chunks[1]);
+    f.render_widget(header, area);
 }
 
 fn format_count(n: usize) -> String {
@@ -112,25 +91,4 @@ fn format_count(n: usize) -> String {
         out.push(ch);
     }
     out.chars().rev().collect()
-}
-
-fn compact_build_info() -> String {
-    let version = BUILD_INFO.version;
-    let sha = BUILD_INFO.git_sha;
-
-    let mut out = String::with_capacity(version.len() + sha.len().min(7) + 3);
-    out.push('v');
-    out.push_str(version);
-
-    if sha != "unknown" {
-        out.push('@');
-        for (idx, ch) in sha.chars().enumerate() {
-            if idx >= 7 {
-                break;
-            }
-            out.push(ch);
-        }
-    }
-
-    out
 }
