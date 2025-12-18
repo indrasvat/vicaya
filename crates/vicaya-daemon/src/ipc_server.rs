@@ -525,7 +525,14 @@ impl IpcServer {
     pub fn run(&self) -> Result<()> {
         while !self.shutdown.load(Ordering::Relaxed) {
             match self.listener.accept() {
-                Ok((stream, _addr)) => self.handle_client(stream),
+                Ok((stream, _addr)) => {
+                    // The listener is non-blocking, but client streams should be blocking so we can
+                    // read full newline-delimited requests and write full JSON responses.
+                    if let Err(e) = stream.set_nonblocking(false) {
+                        error!("Failed to set client stream blocking mode: {}", e);
+                    }
+                    self.handle_client(stream);
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(25));
                 }
