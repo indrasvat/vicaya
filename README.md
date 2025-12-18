@@ -109,6 +109,16 @@ Run `vicaya status` to see whether reconciliation is in progress.
 
 The TUI connects to the same daemon and gives you instant, fuzzy-as-you-type results.
 
+Highlights:
+
+- Split view: `phala` (results) + `purvadarshana` (preview with syntax highlighting)
+- `Ctrl+T` opens the `drishti` switcher (Patra = Files, Sthana = Directories)
+- `Ctrl+O` toggles `purvadarshana`; `Tab` / `Shift+Tab` cycles focus (input/results/preview)
+- Preview scrolling: `j/k`, arrows, `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `g/G`
+- Press `?` for in-app help (when not focused on `prashna`)
+
+Terminology note: the UI uses romanized Sanskrit labels (e.g. `drishti`, `ksetra`, `prashna`, `phala`, `purvadarshana`). See `docs/vicaya-tui-plan.md` for the glossary and longer-term roadmap.
+
 ```bash
 # Dev mode (builds + starts daemon if needed)
 make dev
