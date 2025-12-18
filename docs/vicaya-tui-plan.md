@@ -1,7 +1,7 @@
 # vicaya-tui vNext Plan (Drishti / Ksetra UX)
 
 **Created:** 2025-12-18  
-**Status:** Proposed (UI/UX plan only)  
+**Status:** Plan + implementation tracking (Phase 1–2 shipped; Phase 3 next)  
 **Goal:** Make `vicaya-tui` meaningfully more useful than a results list by adding preview, modes (“views”), scope navigation, richer actions, and uniquely vicaya features—while preserving vicaya’s “instant, index-first” feel.
 
 > Note: This document proposes **UI/UX concepts and terminology** only. It intentionally does **not** rename or refactor code artifacts (modules/types/etc). Any future implementation should keep internal names stable and update only user-facing strings and behavior.
@@ -120,7 +120,8 @@ Three regions that stay consistent across `Drishtis`:
 ### 6.1 Focus & Navigation
 
 - Default focus: `Prashna` input.
-- `Tab`: toggle focus between `Prashna` and `Phala`.
+- `Tab`: cycle focus (`Prashna` → `Phala` → `Purvadarshana` when visible).
+- `Shift+Tab`: cycle focus (reverse).
 - `j/k` + arrows: move selection.
 - `Enter`: primary action (contextual by `Drishti`).
 
@@ -335,6 +336,36 @@ Most UX can be implemented in the TUI without daemon changes, but a few daemon u
 
 ## 12. Implementation Roadmap (Phased)
 
+### Current Implementation Status (As Of 2025-12-18)
+
+Shipped (Phase 1–2, initial):
+
+- [x] Non-blocking TUI loop with a background worker (daemon IPC + preview loading)
+- [x] Componentized layout (header, `prashna`, `phala`, `purvadarshana`, footer, overlays)
+- [x] `Ctrl+T` `Drishti` switcher overlay (navigation via arrows / `j/k`)
+- [x] Split view: `phala` + `purvadarshana` (toggle via `Ctrl+O`)
+- [x] Preview focus + full scrolling (`Tab`/`Shift+Tab` + `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `g/G`)
+- [x] Preview safety: sanitize control chars, avoid wrap/bleed, truncate large/binary files
+- [x] Syntax-highlighted previews (best-effort via `syntect`)
+- [x] Header health indicators (`rakshaka` online/offline, `suchi` count, reconciling)
+- [x] Compact build info in footer (`vX.Y.Z@sha`)
+
+`Drishtis` shipped:
+
+- [x] `Patra` (Files)
+- [x] `Sthana` (Directories) — currently filter-only (next: `Pravesha` / scope push)
+
+Follow-ups still pending (within Phase 1–2 scope):
+
+- [ ] Make the `Drishti` switcher searchable (type-to-filter)
+- [ ] Optional: line numbers + search-within-preview
+
+Next up (Phase 3):
+
+- [ ] Implement `Ksetra` stack with breadcrumbs + `Pravesha`/`Nirgama`
+- [ ] Add `Niyama` chips (`type`, `ext`, `path`, minimal `mtime/size`)
+- [ ] Add `Varga` grouping toggle (dir / ext) without losing ranking
+
 ### Phase 0 — Spec Lock (1–3 days)
 
 - Finalize `Drishti/Ksetra/Niyama/Phala/Purvadarshana/Kriya-Suchi` terminology and UI copy rules.
@@ -390,4 +421,3 @@ Most UX can be implemented in the TUI without daemon changes, but a few daemon u
 - How far to go on content features without content indexing (likely: `rg` lens + optional project index).
 - How to respect exclusions consistently across daemon search and `rg` invocations.
 - macOS permissions/TCC: ensure helpful messaging when preview or grep can’t read a path.
-
