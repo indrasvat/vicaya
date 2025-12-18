@@ -70,9 +70,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     let build = Paragraph::new(build_info)
         .style(
             Style::default()
-                .fg(ui::TEXT_MUTED)
+                .fg(ui::TEXT_SECONDARY)
                 .bg(ui::BG_SURFACE)
-                .add_modifier(Modifier::DIM),
+                .add_modifier(Modifier::ITALIC),
         )
         .alignment(Alignment::Right);
 
