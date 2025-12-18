@@ -1,11 +1,13 @@
 # vicaya (विचय) Implementation Guide
 
 **Document Type:** Living Implementation Guide
-**Last Updated:** 2025-11-26
-**Agent:** Claude Code / GPT-5.1 Thinking / Gemini (or equivalent)
-**Project Status:** Planning → Active
+**Last Updated:** 2025-12-18
+**Agent:** Originally drafted for AI coding agents; maintained by contributors
+**Project Status:** Implemented → Maintenance
 
 vicaya (विचय) is a macOS-native, Rust-based, *blazing-fast* filesystem search tool inspired by "Everything" on Windows. This guide is optimized for AI coding agents working incrementally.
+
+Note: This document began as an implementation plan; many checklists and timelines below are historical. For current usage/status, prefer `README.md` and `CHANGELOG.md`.
 
 ---
 
@@ -36,24 +38,25 @@ vicaya (विचय) is a macOS filesystem search engine that locates files and
 
 ### Key Deliverables
 
-- [ ] **Core Indexing Engine**
+- [x] **Core Indexing Engine**
   - Full-disk initial scan (configurable roots) using a fast, parallel walker.
-  - Persistent file table (metadata store) backed by memory-mapped files.
+  - Persistent file table + trigram index stored on disk (serialized snapshot + journal; mmap is a planned optimization).
   - Trigram-based inverted index for ultra-fast substring search.
-- [ ] **Live Update Engine**
-  - FSEvents-based watcher that incrementally updates the index.
-  - Robust handling of batched/delayed events and volume changes.
-- [ ] **Search Frontends**
-  - [ ] CLI search tool (`vicaya`): instant results, filters, scripting-friendly.
+- [x] **Live Update Engine**
+  - FSEvents-based watcher that incrementally updates the index (macOS).
+  - Self-healing reconciliation to catch missed filesystem events.
+- [x] **Search Frontends**
+  - [x] CLI search tool (`vicaya`): instant results, filters, scripting-friendly.
+  - [x] Terminal UI (`vicaya-tui`): interactive search-as-you-type.
   - [ ] macOS menu-bar / quick-switch UI with global hotkey and result list.
-- [ ] **Config & Preferences**
+- [x] **Config & Preferences**
   - Exclusion rules, per-volume settings, performance knobs.
-- [ ] **Testing & Tooling**
+- [x] **Testing & Tooling**
   - Unit, integration, and performance tests for scanner, index, and watcher.
   - CI pipeline (GitHub Actions) and Makefile workflow.
 - [ ] **Installable Build**
-  - Signed/notarized macOS app bundle + CLI binary.
-  - Optionally, Homebrew tap for CLI installation.
+  - Installable CLI + daemon + TUI binaries (`make install`).
+  - Signed/notarized macOS app bundle; optionally, Homebrew tap.
 
 ### Success Metrics
 
@@ -102,7 +105,7 @@ vicaya (विचय) is a macOS filesystem search engine that locates files and
   - `scanner` (initial crawl) is independent from `watcher` (FSEvents) and `index` (data structures).
 - **SOLID & Rust idioms**
   - Traits for pluggable backends (e.g., mock FS for tests vs real FS).
-  - Clear ownership and lifetimes for mmap'd data.
+  - Clear ownership for on-disk snapshot/journal and in-memory index.
 - **Open/Closed Principle**
   - Core index and file-table are closed to modification but open to new frontends (CLI, GUI) and filters (e.g., future content or tag plugins).
 - **Fail-Fast & Observable**
@@ -281,7 +284,7 @@ RANK  SCORE  MODIFIED            PATH
 
 1. **File Table & String Arena (`vicaya-index`)**
    - Implement `StringArena`:
-     - Backed by `memmap2` or plain `Vec<u8>` with serialization.
+     - Backed by a compact in-memory arena with a serialized snapshot + journal on disk (mmap is an optional future optimization).
      - Store all path/basename strings as UTF-8 with offsets.
    - Implement `FileMeta` and `FileId`:
      - `FileId(u32 or u64)`.
@@ -335,16 +338,16 @@ RANK  SCORE  MODIFIED            PATH
 
 #### Objectives
 
-- [ ] Integrate FSEvents-based watcher for configured roots.
-- [ ] Translate events into index updates.
-- [ ] Implement basic reconciliation for robustness.
+- [x] Integrate FSEvents-based watcher for configured roots.
+- [x] Translate events into index updates.
+- [x] Implement basic reconciliation for robustness.
 
 #### Specific Tasks
 
 1. **FSEvents Integration (`vicaya-watcher`)**
-   - Use `notify` (FSEvents backend) or a dedicated `fsevent-sys` binding.
+   - Use `notify` (FSEvents backend on macOS).
    - Subscribe to all root directories from config.
-   - Persist last FSEvent ID in index metadata for resume.
+   - Persist incremental updates via an index journal for restart/self-healing.
 
 2. **Event Translation**
    - Define `IndexUpdate` enum: `Create`, `Modify`, `Delete`, `Move`.
@@ -939,7 +942,7 @@ make profile-mem    # memory profiling using instruments
 ## Search Query Optimization & Modes
 
 **Added:** 2025-12-03
-**Status:** Analysis Complete, Implementation Phase 1 In Progress
+**Status:** Implemented
 
 ### Problem Statement
 
@@ -1456,7 +1459,7 @@ This section summarizes chosen crates and rationale for agents.
 
 - `ignore` + `walkdir`: high-performance walker, supports `.gitignore`-style patterns.
 - `rayon`: dead-simple data-parallelism for scanning.
-- `notify` or `fsevent-sys`: FSEvents integration (to be decided once PoC is done).
+- `notify` (FSEvents backend on macOS): filesystem watcher integration.
 
 ### Serialization & Config
 

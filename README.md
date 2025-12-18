@@ -11,12 +11,12 @@ vicaya is a macOS-native filesystem search tool inspired by "Everything" on Wind
 - **Instant Search**: Sub-20ms search latency over millions of files
 - **Trigram Index**: Fast substring matching using trigram-based inverted index
 - **Live Updates**: FSEvents-based file watcher keeps index up-to-date
-- **Low Memory**: Efficient memory-mapped file storage
+- **Compact Index**: Efficient string arena + trigram index persisted to disk
 - **CLI, Daemon & TUI**: Command-line tools, always-on daemon, and terminal UI for instant results
 
 ## Status
 
-**Status**: Under Active Development (Phase 1 Complete)
+**Status**: Core functionality complete; ongoing UX/perf improvements
 
 Latest coverage report: [Codecov dashboard](https://codecov.io/gh/indrasvat/vicaya).
 
@@ -26,16 +26,17 @@ Latest coverage report: [Codecov dashboard](https://codecov.io/gh/indrasvat/vica
 - ✅ File table and string arena
 - ✅ Trigram index and query engine
 - ✅ Parallel filesystem scanner
-- ✅ Basic CLI interface
+- ✅ Unix socket IPC daemon (single-instance)
+- ✅ Live updates (FSEvents/notify) + index journal
+- ✅ Startup + daily reconciliation (self-healing)
+- ✅ CLI + TUI interfaces
 
 ### In Progress
-- 🚧 Documentation
-- 🚧 FSEvents integration
-- 🚧 Daemon IPC server
+- 🚧 Documentation + UX polish
+- 🚧 Performance work (persistence/mmap, faster rebuilds)
 
 ### Planned
 - ⏳ macOS UI with global hotkey
-- ⏳ Performance optimization
 - ⏳ Signed/notarized builds
 
 ## Quick Start
@@ -100,6 +101,10 @@ vicaya daemon status
 vicaya daemon stop
 ```
 
+Note: `vicaya search` auto-starts the daemon if needed. If an existing on-disk index is present,
+the daemon performs a background reconciliation on startup to catch missed filesystem changes.
+Run `vicaya status` to see whether reconciliation is in progress.
+
 ### TUI Usage
 
 The TUI connects to the same daemon and gives you instant, fuzzy-as-you-type results.
@@ -115,6 +120,16 @@ vicaya-tui
 # Stop the daemon when done
 make daemon-stop
 ```
+
+### State Directory
+
+By default, vicaya stores state under `~/Library/Application Support/vicaya`:
+
+- `config.toml` (configuration)
+- `daemon.sock` / `daemon.pid` (daemon IPC + lifecycle)
+- `index/index.bin` / `index/index.journal` (snapshot + incremental updates)
+
+Use `VICAYA_DIR=/path/to/dir` to override the base directory (useful for tests and multi-instance setups).
 
 ## Make Targets Reference
 
