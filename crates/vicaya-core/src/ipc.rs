@@ -24,10 +24,16 @@ pub enum Response {
     SearchResults { results: Vec<SearchResult> },
     /// Status information.
     Status {
+        /// Daemon process ID.
+        #[serde(default)]
+        pid: i32,
         indexed_files: usize,
         trigram_count: usize,
         arena_size: usize,
         last_updated: i64,
+        /// Whether the daemon is currently rebuilding/reconciling the index.
+        #[serde(default)]
+        reconciling: bool,
     },
     /// Rebuild completed.
     RebuildComplete { files_indexed: usize },
@@ -73,12 +79,7 @@ impl Response {
 
 /// Get the socket path for IPC communication.
 pub fn socket_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home)
-        .join("Library")
-        .join("Application Support")
-        .join("vicaya")
-        .join("daemon.sock")
+    crate::paths::socket_path()
 }
 
 #[cfg(test)]
@@ -135,16 +136,19 @@ mod tests {
 
         // Test Status response
         let status = Response::Status {
+            pid: 123,
             indexed_files: 100,
             trigram_count: 500,
             arena_size: 2048,
             last_updated: 1234567890,
+            reconciling: false,
         };
         let json = status.to_json().unwrap();
         let decoded = Response::from_json(&json).unwrap();
         assert!(matches!(
             decoded,
             Response::Status {
+                pid: 123,
                 indexed_files: 100,
                 ..
             }
@@ -178,7 +182,6 @@ mod tests {
     #[test]
     fn test_socket_path() {
         let path = socket_path();
-        assert!(path.to_string_lossy().contains("vicaya"));
         assert!(path.to_string_lossy().ends_with("daemon.sock"));
     }
 

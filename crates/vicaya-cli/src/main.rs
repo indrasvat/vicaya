@@ -3,7 +3,6 @@
 mod ipc_client;
 
 use clap::{ArgAction, Parser, Subcommand};
-use std::path::PathBuf;
 use tracing::info;
 use vicaya_core::ipc::{Request, Response};
 use vicaya_core::{Config, Result};
@@ -134,17 +133,20 @@ fn search(query: &str, limit: usize, format: &str) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
-    let mut client = IpcClient::connect()?;
-
     let request = Request::Search {
         query: query.to_string(),
         limit,
     };
 
-    let response = client.request(&request)?;
+    let response = IpcClient::connect()?.request(&request)?;
 
     match response {
-        Response::SearchResults { results } => {
+        Response::SearchResults { mut results } => {
+            if results.is_empty() {
+                if let Some(retry) = wait_for_reconcile_and_retry(&request, format)? {
+                    results = retry;
+                }
+            }
             match format {
                 "json" => {
                     println!("{}", serde_json::to_string_pretty(&results).unwrap());
@@ -184,7 +186,73 @@ fn search(query: &str, limit: usize, format: &str) -> Result<()> {
     }
 }
 
+fn wait_for_reconcile_and_retry(
+    search_request: &Request,
+    format: &str,
+) -> Result<Option<Vec<vicaya_core::ipc::SearchResult>>> {
+    use std::time::{Duration, Instant};
+
+    let reconciling = match IpcClient::connect()?.request(&Request::Status)? {
+        Response::Status { reconciling, .. } => reconciling,
+        _ => return Ok(None),
+    };
+
+    if !reconciling {
+        return Ok(None);
+    }
+
+    if format != "json" {
+        eprintln!("Index is reconciling; waiting for results...");
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+
+    while Instant::now() < deadline {
+        let reconciling = match IpcClient::connect()?.request(&Request::Status)? {
+            Response::Status { reconciling, .. } => reconciling,
+            _ => false,
+        };
+        if !reconciling {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    let Response::SearchResults { results } = IpcClient::connect()?.request(search_request)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(results))
+}
+
 fn rebuild(dry_run: bool) -> Result<()> {
+    // If daemon is running, rebuild via IPC so the in-memory snapshot is updated too.
+    if vicaya_core::daemon::is_running() {
+        if let Ok(mut client) = IpcClient::connect() {
+            let request = Request::Rebuild { dry_run };
+            let response = client.request(&request)?;
+
+            match response {
+                Response::RebuildComplete { files_indexed } => {
+                    if dry_run {
+                        println!("Dry run: would index {} files", files_indexed);
+                    } else {
+                        println!("Index rebuilt: {} files", files_indexed);
+                    }
+                    return Ok(());
+                }
+                Response::Error { message } => {
+                    eprintln!("Error: {}", message);
+                    return Ok(());
+                }
+                _ => {
+                    eprintln!("Unexpected response from daemon");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let config = load_config()?;
     config.ensure_index_dir()?;
 
@@ -213,23 +281,26 @@ fn status(format: &str) -> Result<()> {
 
     match response {
         Response::Status {
+            pid,
             indexed_files,
             trigram_count,
             arena_size,
             last_updated,
+            reconciling,
         } => {
             if format == "json" {
                 // JSON output
                 let json = serde_json::json!({
                     "daemon": {
                         "running": true,
-                        "pid": vicaya_core::daemon::get_pid().unwrap_or(0),
+                        "pid": pid,
                     },
                     "index": {
                         "files": indexed_files,
                         "trigrams": trigram_count,
                         "arena_bytes": arena_size,
                         "last_updated": last_updated,
+                        "reconciling": reconciling,
                     },
                     "metrics": {
                         "bytes_per_file": if indexed_files > 0 { arena_size / indexed_files } else { 0 },
@@ -261,7 +332,6 @@ fn status(format: &str) -> Result<()> {
                 );
 
                 // Daemon info
-                let pid = vicaya_core::daemon::get_pid().unwrap_or(0);
                 // Note: "●" is 3 bytes but 1 char, so use .chars().count() for assertion
                 let plain_line = format!("  {} Daemon{:<43}", "●", "");
                 assert_eq!(plain_line.chars().count(), 53);
@@ -273,6 +343,22 @@ fn status(format: &str) -> Result<()> {
                     daemon_line,
                     "│".bright_blue()
                 );
+
+                if reconciling {
+                    let status_str = "running";
+                    let plain_line = format!("    Reconciliation: {:<33}", status_str);
+                    assert_eq!(plain_line.len(), 53);
+                    let status_line = format!("{:<33}", status_str)
+                        .bright_yellow()
+                        .bold()
+                        .to_string();
+                    println!(
+                        "{}     Reconciliation: {} {}",
+                        "│".bright_blue(),
+                        status_line,
+                        "│".bright_blue()
+                    );
+                }
 
                 let pid_str = pid.to_string();
                 let plain_line = format!("    PID: {:<44}", pid_str);
@@ -512,13 +598,19 @@ fn daemon_command(action: DaemonAction) -> Result<()> {
                 if let Ok(mut client) = IpcClient::connect() {
                     let request = Request::Status;
                     if let Ok(Response::Status {
+                        pid,
                         indexed_files,
                         trigram_count,
                         arena_size,
                         last_updated,
+                        reconciling,
                     }) = client.request(&request)
                     {
                         println!("\nIndex Status:");
+                        println!("  PID: {}", pid);
+                        if reconciling {
+                            println!("  Reconciliation: running");
+                        }
                         println!("  Files indexed: {}", indexed_files);
                         println!("  Trigrams: {}", trigram_count);
                         println!("  Arena size: {} bytes", arena_size);
@@ -543,11 +635,7 @@ fn daemon_command(action: DaemonAction) -> Result<()> {
 }
 
 fn load_config() -> Result<Config> {
-    let config_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
-        .join("Library")
-        .join("Application Support")
-        .join("vicaya")
-        .join("config.toml");
+    let config_path = vicaya_core::paths::config_path();
 
     if config_path.exists() {
         Config::load(&config_path)
@@ -559,18 +647,10 @@ fn load_config() -> Result<Config> {
 fn init_config(force: bool) -> Result<()> {
     use std::fs;
 
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let config_dir = PathBuf::from(&home)
-        .join("Library")
-        .join("Application Support")
-        .join("vicaya");
+    let config_dir = vicaya_core::paths::vicaya_dir();
 
     let config_path = config_dir.join("config.toml");
-    let index_dir = PathBuf::from(&home)
-        .join("Library")
-        .join("Application Support")
-        .join("vicaya")
-        .join("index");
+    let index_dir = config_dir.join("index");
 
     // Check if config already exists
     if config_path.exists() && !force {
@@ -674,7 +754,7 @@ exclusions = [
 ]
 
 # Where to store the index file
-index_path = "~/Library/Application Support/vicaya/index"
+index_path = "{}"
 
 # Maximum memory to use for indexing (in MB)
 max_memory_mb = 512
@@ -685,6 +765,7 @@ scanner_threads = {}
 # Hour of day (0-23) to run automatic reconciliation
 reconcile_hour = 3
 "#,
+        index_dir.display(),
         num_cpus::get().max(2)
     );
 

@@ -105,7 +105,7 @@ Compression Ratio     ~6.6:1 (estimated)
 |----------------------------|--------|------|------|--------|
 | Substring Search           | ✅ 6ms | ❌ 85ms | ❌ 677ms | ✅ ~5ms* |
 | Instant Results            | ✅ Yes | ❌ No | ❌ No | ✅ Yes |
-| Real-time Updates          | 🚧 WIP | ✅ N/A | ✅ N/A | ❌ Periodic |
+| Real-time Updates          | ✅ macOS | ✅ N/A | ✅ N/A | ❌ Periodic |
 | Content Search             | ❌ No  | ❌ No | ✅ Yes | ❌ No |
 | Memory Usage (42 files)    | ✅ 11KB | ✅ 0KB | ✅ 0KB | ~20KB* |
 | Cross-platform             | ❌ macOS | ✅ Yes | ✅ Yes | ✅ Yes |
@@ -118,7 +118,7 @@ Compression Ratio     ~6.6:1 (estimated)
 - **14x faster** for all file search operations
 - Instant results vs full directory traversal
 - Comparable memory (in-memory index vs filesystem cache)
-- Trade-off: Requires index rebuild on changes
+- Keeps index updated via watcher + journal + periodic reconciliation
 
 ### vs. grep  
 - **112x faster** for filename searches
@@ -130,7 +130,7 @@ Compression Ratio     ~6.6:1 (estimated)
 - vicaya advantages:
   - Trigram substring matching (vs simple glob)
   - Designed for interactive search-as-you-type
-  - Eventual real-time FSEvents updates
+  - Real-time FSEvents updates (macOS) + periodic reconciliation
 - locate advantages:
   - System-wide by default
   - Mature, stable codebase

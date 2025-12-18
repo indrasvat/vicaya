@@ -63,6 +63,31 @@ impl TrigramIndex {
         }
     }
 
+    /// Remove a file from only the posting lists implied by the given text.
+    ///
+    /// This is much cheaper than `remove()` for incremental updates because it
+    /// only touches posting lists the file could have been added to.
+    pub fn remove_text(&mut self, file_id: FileId, text: &str) {
+        let mut trigrams = Trigram::extract(text);
+        trigrams.sort_unstable();
+        trigrams.dedup();
+
+        let mut maybe_empty = Vec::new();
+
+        for trigram in trigrams {
+            if let Some(posting_list) = self.index.get_mut(&trigram) {
+                posting_list.retain(|&id| id != file_id);
+                if posting_list.is_empty() {
+                    maybe_empty.push(trigram);
+                }
+            }
+        }
+
+        for trigram in maybe_empty {
+            self.index.remove(&trigram);
+        }
+    }
+
     /// Query the index for files containing all given trigrams.
     pub fn query(&self, trigrams: &[Trigram]) -> Vec<FileId> {
         if trigrams.is_empty() {
