@@ -115,6 +115,7 @@ Highlights:
 - `Ctrl+T` opens the `drishti` switcher (Patra = Files, Sthana = Directories)
 - `Ctrl+O` toggles `purvadarshana`; `Tab` / `Shift+Tab` cycles focus (input/results/preview)
 - Preview scrolling: `j/k`, arrows, `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `g/G`
+- Actions (in `phala`): `Enter/o` open in `$EDITOR`, `y` copy path, `p` print path and exit, `r` reveal in file manager
 - Press `?` for in-app help (when not focused on `prashna`)
 
 Terminology note: the UI uses romanized Sanskrit labels (e.g. `drishti`, `ksetra`, `prashna`, `phala`, `purvadarshana`). See `docs/vicaya-tui-plan.md` for the glossary and longer-term roadmap.
