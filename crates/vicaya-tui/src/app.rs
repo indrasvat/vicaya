@@ -2,6 +2,7 @@
 
 use crate::state::{AppMode, AppState};
 use crate::ui;
+use crate::worker::{start_worker, WorkerCommand, WorkerEvent};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -10,13 +11,11 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    layout::{Constraint, Direction, Layout},
     Frame, Terminal,
 };
 use std::io;
+use std::sync::mpsc;
 
 /// Open a file in the user's preferred editor
 fn open_file_in_editor(path: &str) -> Result<()> {
@@ -54,8 +53,15 @@ pub fn run() -> Result<()> {
     // Create app state
     let mut app = AppState::new();
 
+    let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>();
+    let (evt_tx, evt_rx) = mpsc::channel::<WorkerEvent>();
+    let worker_handle = start_worker(cmd_rx, evt_tx);
+
     // Run the main loop
-    let res = run_app(&mut terminal, &mut app);
+    let res = run_app(&mut terminal, &mut app, cmd_tx.clone(), evt_rx);
+
+    let _ = cmd_tx.send(WorkerCommand::Quit);
+    let _ = worker_handle.join();
 
     // Restore terminal
     disable_raw_mode()?;
@@ -87,12 +93,53 @@ pub fn run() -> Result<()> {
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut AppState,
+    cmd_tx: mpsc::Sender<WorkerCommand>,
+    evt_rx: mpsc::Receiver<WorkerEvent>,
 ) -> Result<()> {
     let mut last_query = String::new();
-    let mut last_search_time = std::time::Instant::now();
+    let mut last_search_sent_at = std::time::Instant::now();
+    let mut last_view = app.view;
+    let mut search_id: u64 = 0;
+    let mut active_search_id: u64 = 0;
+
+    let mut preview_id: u64 = 0;
+    let mut active_preview_id: u64 = 0;
+    let mut last_preview_path: Option<String> = None;
+
     let mut error_clear_time: Option<std::time::Instant> = None;
 
     loop {
+        // Apply worker events
+        while let Ok(evt) = evt_rx.try_recv() {
+            match evt {
+                WorkerEvent::Status { status } => {
+                    app.daemon_status = status;
+                }
+                WorkerEvent::SearchResults { id, results, error } => {
+                    if id == active_search_id {
+                        app.search.set_results(results);
+                        app.search.is_searching = false;
+                        app.error = error;
+                    }
+                }
+                WorkerEvent::PreviewReady {
+                    id,
+                    path,
+                    title,
+                    lines,
+                    truncated,
+                } => {
+                    if id == active_preview_id {
+                        app.preview.is_loading = false;
+                        app.preview.truncated = truncated;
+                        app.preview.path = Some(path);
+                        app.preview.title = title;
+                        app.preview.lines = lines;
+                    }
+                }
+            }
+        }
+
         // Draw UI
         terminal.draw(|f| ui_render(f, app))?;
 
@@ -112,13 +159,60 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
 
+        // Re-run the current search when switching drishti.
+        if app.view != last_view {
+            last_view = app.view;
+            app.search.is_searching = true;
+            search_id = search_id.wrapping_add(1);
+            active_search_id = search_id;
+            let _ = cmd_tx.send(WorkerCommand::Search {
+                id: active_search_id,
+                query: app.search.query.clone(),
+                limit: 100,
+                view: app.view,
+            });
+            last_search_sent_at = std::time::Instant::now();
+        }
+
         // Check if query changed and trigger search (with debounce)
         if app.search.query != last_query {
-            let elapsed = last_search_time.elapsed();
+            let elapsed = last_search_sent_at.elapsed();
             if elapsed > std::time::Duration::from_millis(150) || app.search.query.is_empty() {
                 last_query = app.search.query.clone();
-                app.perform_search();
-                last_search_time = std::time::Instant::now();
+                app.search.is_searching = true;
+                search_id = search_id.wrapping_add(1);
+                active_search_id = search_id;
+                let _ = cmd_tx.send(WorkerCommand::Search {
+                    id: active_search_id,
+                    query: app.search.query.clone(),
+                    limit: 100,
+                    view: app.view,
+                });
+                last_search_sent_at = std::time::Instant::now();
+            }
+        }
+
+        // Schedule preview for selected result (best-effort).
+        if app.preview.is_visible && app.mode == AppMode::Search {
+            if let Some(result) = app.search.selected_result() {
+                if last_preview_path.as_deref() != Some(result.path.as_str()) {
+                    preview_id = preview_id.wrapping_add(1);
+                    active_preview_id = preview_id;
+                    last_preview_path = Some(result.path.clone());
+                    app.preview.is_loading = true;
+                    app.preview.truncated = false;
+                    app.preview.path = Some(result.path.clone());
+                    app.preview.title = result.name.clone();
+                    app.preview.lines.clear();
+                    app.preview.scroll = 0;
+                    let _ = cmd_tx.send(WorkerCommand::Preview {
+                        id: active_preview_id,
+                        path: result.path.clone(),
+                    });
+                }
+            } else if last_preview_path.is_some() {
+                last_preview_path = None;
+                app.preview.clear();
             }
         }
 
@@ -143,7 +237,37 @@ fn handle_key_event(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
     match app.mode {
         AppMode::Search => handle_search_keys(app, key, modifiers),
         AppMode::Help => handle_help_keys(app, key),
+        AppMode::DrishtiSwitcher => handle_drishti_switcher_keys(app, key, modifiers),
         AppMode::Confirm(_) => handle_confirm_keys(app, key),
+    }
+}
+
+/// Handle keys in drishti switcher mode.
+fn handle_drishti_switcher_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        (KeyCode::Esc, _) => app.toggle_drishti_switcher(),
+        (KeyCode::Char('t'), KeyModifiers::CONTROL) => app.toggle_drishti_switcher(),
+        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
+            app.ui.drishti_switcher.select_next();
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, KeyModifiers::NONE) => {
+            app.ui.drishti_switcher.select_previous();
+        }
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            let selected = app.ui.drishti_switcher.selected_view();
+            if selected.is_enabled() {
+                app.view = selected;
+                app.toggle_drishti_switcher();
+            } else {
+                app.error = Some(format!(
+                    "drishti '{}' ({}) is coming soon",
+                    selected.label(),
+                    selected.english_hint()
+                ));
+                app.toggle_drishti_switcher();
+            }
+        }
+        _ => {}
     }
 }
 
@@ -156,6 +280,19 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
             app.quit();
             return;
         }
+        // Drishti switcher
+        (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+            app.toggle_drishti_switcher();
+            return;
+        }
+        // Toggle preview
+        (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+            app.preview.toggle();
+            if !app.preview.is_visible && app.search.is_preview_focused() {
+                app.search.focus = crate::state::FocusTarget::Results;
+            }
+            return;
+        }
         // Help
         (KeyCode::Char('?'), KeyModifiers::NONE) if !app.search.is_input_focused() => {
             app.toggle_help();
@@ -163,12 +300,18 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
         }
         // Toggle focus with Tab
         (KeyCode::Tab, KeyModifiers::NONE) => {
-            app.search.toggle_focus();
+            cycle_focus_forward(app);
+            return;
+        }
+        (KeyCode::BackTab, _) => {
+            cycle_focus_backward(app);
             return;
         }
         // Escape clears search or changes focus
         (KeyCode::Esc, KeyModifiers::NONE) => {
-            if app.search.is_results_focused() {
+            if app.search.is_preview_focused() {
+                app.search.focus = crate::state::FocusTarget::Results;
+            } else if app.search.is_results_focused() {
                 app.search.focus = crate::state::FocusTarget::Input;
             } else {
                 app.search.clear_query();
@@ -181,8 +324,10 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
     // Focus-specific keys
     if app.search.is_input_focused() {
         handle_input_keys(app, key, modifiers);
-    } else {
+    } else if app.search.is_results_focused() {
         handle_results_keys(app, key, modifiers);
+    } else {
+        handle_preview_keys(app, key, modifiers);
     }
 }
 
@@ -220,6 +365,15 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         // Up arrow at top goes back to input
         (KeyCode::Up, KeyModifiers::NONE) if app.search.selected_index == 0 => {
             app.search.focus = crate::state::FocusTarget::Input;
+        }
+        // Page navigation
+        (KeyCode::PageUp, KeyModifiers::NONE) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            let step = app.ui.viewport_height.max(1) as isize;
+            move_selection_by(app, -step);
+        }
+        (KeyCode::PageDown, KeyModifiers::NONE) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            let step = app.ui.viewport_height.max(1) as isize;
+            move_selection_by(app, step);
         }
         // Navigation - vi keys and arrows
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
@@ -262,6 +416,87 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         }
         _ => {}
     }
+}
+
+/// Handle keys when preview is focused
+fn handle_preview_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
+            scroll_preview_by(app, 1);
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, KeyModifiers::NONE) => {
+            scroll_preview_by(app, -1);
+        }
+        (KeyCode::PageDown, KeyModifiers::NONE) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            let step = app.ui.preview_viewport_height.max(1) as i32;
+            scroll_preview_by(app, step);
+        }
+        (KeyCode::PageUp, KeyModifiers::NONE) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            let step = app.ui.preview_viewport_height.max(1) as i32;
+            scroll_preview_by(app, -step);
+        }
+        (KeyCode::Char('g'), KeyModifiers::NONE) => {
+            app.preview.scroll = 0;
+        }
+        (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
+            app.preview.scroll = preview_max_scroll(app);
+        }
+        _ => {}
+    }
+}
+
+fn cycle_focus_forward(app: &mut AppState) {
+    let has_preview = app.preview.is_visible;
+    app.search.focus = match app.search.focus {
+        crate::state::FocusTarget::Input => crate::state::FocusTarget::Results,
+        crate::state::FocusTarget::Results => {
+            if has_preview {
+                crate::state::FocusTarget::Preview
+            } else {
+                crate::state::FocusTarget::Input
+            }
+        }
+        crate::state::FocusTarget::Preview => crate::state::FocusTarget::Input,
+    };
+}
+
+fn cycle_focus_backward(app: &mut AppState) {
+    let has_preview = app.preview.is_visible;
+    app.search.focus = match app.search.focus {
+        crate::state::FocusTarget::Input => {
+            if has_preview {
+                crate::state::FocusTarget::Preview
+            } else {
+                crate::state::FocusTarget::Results
+            }
+        }
+        crate::state::FocusTarget::Results => crate::state::FocusTarget::Input,
+        crate::state::FocusTarget::Preview => crate::state::FocusTarget::Results,
+    };
+}
+
+fn move_selection_by(app: &mut AppState, delta: isize) {
+    if app.search.results.is_empty() {
+        return;
+    }
+
+    let len = app.search.results.len() as isize;
+    let current = app.search.selected_index as isize;
+    let next = (current + delta).clamp(0, len - 1);
+    app.search.selected_index = next as usize;
+}
+
+fn preview_max_scroll(app: &AppState) -> u16 {
+    let viewport = app.ui.preview_viewport_height.max(1);
+    let max_start = app.preview.lines.len().saturating_sub(viewport);
+    max_start.min(u16::MAX as usize) as u16
+}
+
+fn scroll_preview_by(app: &mut AppState, delta: i32) {
+    let current = app.preview.scroll as i32;
+    let max = preview_max_scroll(app) as i32;
+    let next = (current + delta).clamp(0, max);
+    app.preview.scroll = next as u16;
 }
 
 /// Open file in $EDITOR or fallback editor
@@ -351,315 +586,45 @@ fn handle_confirm_keys(_app: &mut AppState, _key: KeyCode) {
 }
 
 /// Render the UI
-fn ui_render(f: &mut Frame, app: &AppState) {
+fn ui_render(f: &mut Frame, app: &mut AppState) {
     match app.mode {
         AppMode::Search => render_search(f, app),
-        AppMode::Help => render_help(f),
-        AppMode::Confirm(_) => render_confirm(f, app),
+        AppMode::Help => ui::overlays::render_help(f),
+        AppMode::DrishtiSwitcher => {
+            render_search(f, app);
+            ui::overlays::render_drishti_switcher(f, app);
+        }
+        AppMode::Confirm(_) => ui::overlays::render_confirm(f, app),
     }
 }
 
-/// Render search interface
-fn render_search(f: &mut Frame, app: &AppState) {
-    // Create layout
+/// Render search interface.
+fn render_search(f: &mut Frame, app: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Length(3), // Search input
-            Constraint::Min(0),    // Results
+            Constraint::Min(0),    // Body
             Constraint::Length(1), // Status bar
         ])
         .split(f.area());
 
-    render_header(f, chunks[0], app);
-    render_search_input(f, chunks[1], app);
-    render_results(f, chunks[2], app);
-    render_status_bar(f, chunks[3], app);
-}
+    ui::header::render(f, chunks[0], app);
+    ui::search_input::render(f, chunks[1], app);
 
-/// Render header
-fn render_header(f: &mut Frame, area: Rect, app: &AppState) {
-    let mut spans = vec![
-        Span::styled(
-            "vicaya",
-            Style::default()
-                .fg(ui::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Fast File Search",
-            Style::default().fg(ui::TEXT_SECONDARY),
-        ),
-    ];
-
-    // Add daemon status
-    if let Some(status) = &app.daemon_status {
-        spans.push(Span::styled("  ", Style::default()));
-        spans.push(Span::styled(
-            format!("📁 {} files", status.indexed_files),
-            Style::default().fg(ui::INFO),
-        ));
+    if app.preview.is_visible {
+        let body = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(chunks[2]);
+        app.ui.preview_viewport_height = body[1].height.saturating_sub(2) as usize;
+        ui::results::render(f, body[0], app);
+        ui::preview::render(f, body[1], app);
     } else {
-        spans.push(Span::styled(
-            "  ⚠️  daemon offline",
-            Style::default().fg(ui::WARNING),
-        ));
+        app.ui.preview_viewport_height = 0;
+        ui::results::render(f, chunks[2], app);
     }
 
-    let header = Paragraph::new(Line::from(spans)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(ui::BORDER_DIM)),
-    );
-
-    f.render_widget(header, area);
-}
-
-/// Render search input
-fn render_search_input(f: &mut Frame, area: Rect, app: &AppState) {
-    let query = &app.search.query;
-    let cursor_pos = app.search.cursor_position;
-    let is_focused = app.search.is_input_focused();
-
-    // Use different border style based on focus
-    let border_style = if is_focused {
-        Style::default().fg(ui::BORDER_FOCUS)
-    } else {
-        Style::default().fg(ui::BORDER_DIM)
-    };
-
-    let input = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(ui::ACCENT)),
-        Span::styled(query, Style::default().fg(ui::TEXT_PRIMARY)),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .style(if is_focused {
-                Style::default().bg(ui::BG_ELEVATED)
-            } else {
-                Style::default()
-            }),
-    );
-
-    f.render_widget(input, area);
-
-    // Show cursor only when input is focused
-    if is_focused {
-        // Cursor position: 1 (border) + 1 (space after >) + cursor_pos
-        let cursor_x = area.x + 3 + cursor_pos as u16;
-        let cursor_y = area.y + 1;
-        f.set_cursor_position((cursor_x, cursor_y));
-    }
-}
-
-/// Truncate path intelligently for display
-fn truncate_path(path: &str, max_len: usize, show_full: bool) -> String {
-    if show_full || path.len() <= max_len {
-        return path.to_string();
-    }
-
-    // Show beginning and end with ... in the middle
-    let start_len = max_len / 2;
-    let end_len = max_len - start_len - 3; // Reserve 3 chars for "..."
-
-    if path.len() > max_len {
-        format!(
-            "{}...{}",
-            &path[..start_len],
-            &path[path.len().saturating_sub(end_len)..]
-        )
-    } else {
-        path.to_string()
-    }
-}
-
-/// Render results list
-fn render_results(f: &mut Frame, area: Rect, app: &AppState) {
-    let results = &app.search.results;
-    let selected = app.search.selected_index;
-
-    // Calculate available width for path display (rough estimate)
-    let available_width = area.width.saturating_sub(4); // Account for borders
-    let max_path_len = available_width.saturating_sub(30) as usize; // Reserve space for name, score, marker
-
-    let items: Vec<ListItem> = results
-        .iter()
-        .enumerate()
-        .map(|(i, result)| {
-            let marker = if i == selected { "▸" } else { " " };
-            let score_color = ui::score_color(result.score);
-            let is_selected = i == selected;
-
-            // Get parent directory path (remove filename)
-            let path = std::path::Path::new(&result.path);
-            let dir_path = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-
-            // Truncate path if not selected
-            let display_path = truncate_path(dir_path, max_path_len.max(30), is_selected);
-
-            let line = Line::from(vec![
-                Span::styled(marker, Style::default().fg(ui::PRIMARY)),
-                Span::raw(" "),
-                Span::styled(&result.name, Style::default().fg(ui::TEXT_PRIMARY)),
-                Span::raw(" "),
-                Span::styled(
-                    format!("({}) ", display_path),
-                    Style::default()
-                        .fg(ui::TEXT_MUTED)
-                        .add_modifier(Modifier::DIM),
-                ),
-                Span::styled(
-                    format!("{:.2}", result.score),
-                    Style::default().fg(score_color),
-                ),
-            ]);
-
-            let style = if i == selected {
-                Style::default().bg(ui::BG_ELEVATED)
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(line).style(style)
-        })
-        .collect();
-
-    // Show focused border when results are focused
-    let border_style = if app.search.is_results_focused() {
-        Style::default().fg(ui::BORDER_FOCUS)
-    } else {
-        Style::default().fg(ui::BORDER_DIM)
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(format!("RESULTS ({})", results.len())),
-    );
-
-    f.render_widget(list, area);
-}
-
-/// Render status bar
-fn render_status_bar(f: &mut Frame, area: Rect, app: &AppState) {
-    let mut spans = vec![
-        Span::styled("Tab:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" switch  ", Style::default().fg(ui::TEXT_SECONDARY)),
-    ];
-
-    // Add focus-specific hints
-    if app.search.is_results_focused() {
-        spans.extend(vec![
-            Span::styled("↵:", Style::default().fg(ui::PRIMARY)),
-            Span::styled(" open  ", Style::default().fg(ui::TEXT_SECONDARY)),
-            Span::styled("y:", Style::default().fg(ui::PRIMARY)),
-            Span::styled(" copy  ", Style::default().fg(ui::TEXT_SECONDARY)),
-            Span::styled("p:", Style::default().fg(ui::PRIMARY)),
-            Span::styled(" print  ", Style::default().fg(ui::TEXT_SECONDARY)),
-            Span::styled("r:", Style::default().fg(ui::PRIMARY)),
-            Span::styled(" reveal  ", Style::default().fg(ui::TEXT_SECONDARY)),
-        ]);
-    }
-
-    spans.extend(vec![
-        Span::styled("Esc:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" clear  ", Style::default().fg(ui::TEXT_SECONDARY)),
-        Span::styled("Ctrl-c:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" quit", Style::default().fg(ui::TEXT_SECONDARY)),
-    ]);
-
-    // Show error if any
-    if let Some(error) = &app.error {
-        spans.push(Span::styled("  ", Style::default()));
-        spans.push(Span::styled(
-            format!("⚠️  {}", error),
-            Style::default().fg(ui::ERROR),
-        ));
-    }
-
-    let hints = Line::from(spans);
-    let status = Paragraph::new(hints).style(Style::default().bg(ui::BG_SURFACE));
-
-    f.render_widget(status, area);
-}
-
-/// Render help overlay
-fn render_help(f: &mut Frame) {
-    let help_text = vec![
-        "Vicaya - Fast File Search TUI",
-        "",
-        "Focus:",
-        "  Tab           Switch between input/results",
-        "  ↓ (in input)  Move to results",
-        "  ↑ (at top)    Move to input",
-        "",
-        "Navigation (when results focused):",
-        "  j / ↓         Move down",
-        "  k / ↑         Move up",
-        "  g             Jump to top",
-        "  G             Jump to bottom",
-        "",
-        "File Actions (when results focused):",
-        "  Enter / o     Open in $EDITOR",
-        "  y             Copy path to clipboard",
-        "  p             Print path and exit (terminal)",
-        "  r             Reveal in file manager",
-        "",
-        "Other:",
-        "  Esc           Clear search / back to input",
-        "  Ctrl-c        Quit",
-        "",
-        "Press Esc to close this help",
-    ];
-
-    let help = Paragraph::new(help_text.join("\n"))
-        .style(Style::default().fg(ui::TEXT_PRIMARY).bg(ui::BG_DARK))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ui::PRIMARY))
-                .title(" Help "),
-        );
-
-    let area = centered_rect(60, 70, f.area());
-    f.render_widget(help, area);
-}
-
-/// Render confirmation dialog
-fn render_confirm(f: &mut Frame, _app: &AppState) {
-    let confirm = Paragraph::new("Are you sure? (y/n)")
-        .style(Style::default().fg(ui::TEXT_PRIMARY).bg(ui::BG_DARK))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ui::WARNING)),
-        );
-
-    let area = centered_rect(40, 20, f.area());
-    f.render_widget(confirm, area);
-}
-
-/// Helper to create centered rect
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+    ui::footer::render(f, chunks[3], app);
 }

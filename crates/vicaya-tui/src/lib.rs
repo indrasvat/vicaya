@@ -4,6 +4,7 @@ pub mod app;
 pub mod client;
 pub mod state;
 pub mod ui;
+mod worker;
 
 pub use app::run;
 pub use client::IpcClient;
