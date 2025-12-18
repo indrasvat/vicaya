@@ -1,6 +1,6 @@
 //! Application state management.
 
-use crate::client::{DaemonStatus, IpcClient};
+use crate::client::DaemonStatus;
 use vicaya_index::SearchResult;
 
 /// Application mode
@@ -10,6 +10,8 @@ pub enum AppMode {
     Search,
     /// Help overlay
     Help,
+    /// Drishti (view) switcher overlay
+    DrishtiSwitcher,
     /// Confirmation dialog
     Confirm(Action),
 }
@@ -25,12 +27,14 @@ pub enum Action {
 pub struct AppState {
     /// Current mode
     pub mode: AppMode,
+    /// Current Drishti (view)
+    pub view: ViewKind,
     /// Search state
     pub search: SearchState,
+    /// Preview state
+    pub preview: PreviewState,
     /// UI state
     pub ui: UiState,
-    /// IPC client
-    pub client: IpcClient,
     /// Daemon status
     pub daemon_status: Option<DaemonStatus>,
     /// Whether to quit
@@ -46,15 +50,13 @@ pub struct AppState {
 impl AppState {
     /// Create a new application state
     pub fn new() -> Self {
-        let mut client = IpcClient::new();
-        let daemon_status = client.status().ok();
-
         Self {
             mode: AppMode::Search,
+            view: ViewKind::Patra,
             search: SearchState::new(),
+            preview: PreviewState::new(),
             ui: UiState::new(),
-            client,
-            daemon_status,
+            daemon_status: None,
             should_quit: false,
             error: None,
             print_on_exit: None,
@@ -63,39 +65,9 @@ impl AppState {
     }
 
     /// Perform a search
-    pub fn perform_search(&mut self) {
-        let query = self.search.query.trim();
-        if query.is_empty() {
-            self.search.results.clear();
-            self.search.selected_index = 0;
-            return;
-        }
-
-        self.search.is_searching = true;
-
-        // Try to reconnect if not connected
-        if !self.client.is_connected() {
-            self.client.reconnect();
-        }
-
-        match self.client.search(query, 100) {
-            Ok(results) => {
-                self.search.set_results(results);
-                self.error = None;
-            }
-            Err(e) => {
-                // Try reconnecting on error
-                self.client.reconnect();
-                self.error = Some(format!("Search error: {}", e));
-                self.search.results.clear();
-            }
-        }
-        self.search.is_searching = false;
-    }
-
-    /// Update daemon status
-    pub fn update_status(&mut self) {
-        self.daemon_status = self.client.status().ok();
+    pub fn clear_results(&mut self) {
+        self.search.results.clear();
+        self.search.selected_index = 0;
     }
 
     /// Check if should quit
@@ -113,6 +85,14 @@ impl AppState {
         self.mode = match self.mode {
             AppMode::Help => AppMode::Search,
             _ => AppMode::Help,
+        };
+    }
+
+    /// Toggle drishti switcher overlay.
+    pub fn toggle_drishti_switcher(&mut self) {
+        self.mode = match self.mode {
+            AppMode::DrishtiSwitcher => AppMode::Search,
+            _ => AppMode::DrishtiSwitcher,
         };
     }
 }
@@ -272,6 +252,8 @@ pub struct UiState {
     pub scroll_offset: usize,
     /// Viewport height
     pub viewport_height: usize,
+    /// Drishti switcher state
+    pub drishti_switcher: DrishtiSwitcherState,
 }
 
 impl UiState {
@@ -280,6 +262,7 @@ impl UiState {
         Self {
             scroll_offset: 0,
             viewport_height: 0,
+            drishti_switcher: DrishtiSwitcherState::new(),
         }
     }
 
@@ -295,6 +278,164 @@ impl UiState {
 }
 
 impl Default for UiState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Drishti (view) in the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewKind {
+    /// `Patra` — Files
+    Patra,
+    /// `Sthana` — Directories
+    Sthana,
+    /// `Smriti` — Recent / history
+    Smriti,
+    /// `Navatama` — Recently modified
+    Navatama,
+    /// `Brihat` — Large files
+    Brihat,
+    /// `Antarvicaya` — Content (grep)
+    Antarvicaya,
+    /// `Sanketa` — Symbols
+    Sanketa,
+    /// `Itihasa` — Git
+    Itihasa,
+    /// `Parivartana` — Changed since…
+    Parivartana,
+    /// `Sambandha` — Related
+    Sambandha,
+    /// `Ankita` — Pinned
+    Ankita,
+}
+
+impl ViewKind {
+    pub const ALL: &'static [ViewKind] = &[
+        ViewKind::Patra,
+        ViewKind::Sthana,
+        ViewKind::Smriti,
+        ViewKind::Navatama,
+        ViewKind::Brihat,
+        ViewKind::Antarvicaya,
+        ViewKind::Sanketa,
+        ViewKind::Itihasa,
+        ViewKind::Parivartana,
+        ViewKind::Sambandha,
+        ViewKind::Ankita,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewKind::Patra => "Patra",
+            ViewKind::Sthana => "Sthana",
+            ViewKind::Smriti => "Smriti",
+            ViewKind::Navatama => "Navatama",
+            ViewKind::Brihat => "Brihat",
+            ViewKind::Antarvicaya => "Antarvicaya",
+            ViewKind::Sanketa => "Sanketa",
+            ViewKind::Itihasa => "Itihasa",
+            ViewKind::Parivartana => "Parivartana",
+            ViewKind::Sambandha => "Sambandha",
+            ViewKind::Ankita => "Ankita",
+        }
+    }
+
+    pub fn english_hint(self) -> &'static str {
+        match self {
+            ViewKind::Patra => "Files",
+            ViewKind::Sthana => "Directories",
+            ViewKind::Smriti => "Recent",
+            ViewKind::Navatama => "Modified",
+            ViewKind::Brihat => "Large",
+            ViewKind::Antarvicaya => "Content",
+            ViewKind::Sanketa => "Symbols",
+            ViewKind::Itihasa => "Git",
+            ViewKind::Parivartana => "Changed",
+            ViewKind::Sambandha => "Related",
+            ViewKind::Ankita => "Pinned",
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        matches!(self, ViewKind::Patra | ViewKind::Sthana)
+    }
+}
+
+/// State for the Drishti switcher overlay.
+pub struct DrishtiSwitcherState {
+    pub selected_index: usize,
+}
+
+impl DrishtiSwitcherState {
+    pub fn new() -> Self {
+        Self { selected_index: 0 }
+    }
+
+    pub fn selected_view(&self) -> ViewKind {
+        ViewKind::ALL[self
+            .selected_index
+            .min(ViewKind::ALL.len().saturating_sub(1))]
+    }
+
+    pub fn select_next(&mut self) {
+        self.selected_index = (self.selected_index + 1) % ViewKind::ALL.len();
+    }
+
+    pub fn select_previous(&mut self) {
+        self.selected_index = if self.selected_index == 0 {
+            ViewKind::ALL.len().saturating_sub(1)
+        } else {
+            self.selected_index - 1
+        };
+    }
+}
+
+impl Default for DrishtiSwitcherState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Preview state for the selected item.
+pub struct PreviewState {
+    pub is_visible: bool,
+    pub is_loading: bool,
+    pub truncated: bool,
+    pub path: Option<String>,
+    pub title: String,
+    pub lines: Vec<String>,
+    pub scroll: u16,
+}
+
+impl PreviewState {
+    pub fn new() -> Self {
+        Self {
+            is_visible: true,
+            is_loading: false,
+            truncated: false,
+            path: None,
+            title: String::new(),
+            lines: Vec::new(),
+            scroll: 0,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.is_loading = false;
+        self.truncated = false;
+        self.path = None;
+        self.title.clear();
+        self.lines.clear();
+        self.scroll = 0;
+    }
+
+    pub fn toggle(&mut self) {
+        self.is_visible = !self.is_visible;
+    }
+}
+
+impl Default for PreviewState {
     fn default() -> Self {
         Self::new()
     }
