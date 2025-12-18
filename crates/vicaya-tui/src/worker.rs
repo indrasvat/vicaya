@@ -10,6 +10,7 @@ use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, Theme, ThemeSet},
     parsing::SyntaxSet,
+    util::LinesWithEndings,
 };
 
 pub enum WorkerCommand {
@@ -158,8 +159,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
 fn pick_theme(themes: &ThemeSet) -> &Theme {
     themes
         .themes
-        .get("base16-ocean.dark")
-        .or_else(|| themes.themes.get("Monokai Extended"))
+        .get("Monokai Extended")
+        .or_else(|| themes.themes.get("base16-ocean.dark"))
         .or_else(|| themes.themes.get("Solarized (dark)"))
         .or_else(|| themes.themes.values().next())
         .expect("syntect theme set must not be empty")
@@ -319,17 +320,19 @@ fn preview_file(
     let syntax = find_syntax(path, &text, syntaxes);
     let mut highlighter = syntax.map(|s| HighlightLines::new(s, theme));
 
-    for (i, line) in text.lines().enumerate() {
+    for (i, raw_line) in LinesWithEndings::from(text.as_ref()).enumerate() {
         if i >= MAX_LINES {
             truncated_lines = true;
             break;
         }
 
         if let Some(ref mut highlighter) = highlighter {
-            match highlighter.highlight_line(line, syntaxes) {
+            let sanitized = sanitize_line(raw_line);
+            match highlighter.highlight_line(&sanitized, syntaxes) {
                 Ok(ranges) => {
                     let mut out = Vec::with_capacity(ranges.len().max(1));
                     for (style, fragment) in ranges {
+                        let fragment = strip_line_endings(fragment);
                         if fragment.is_empty() {
                             continue;
                         }
@@ -346,11 +349,12 @@ fn preview_file(
                     }
                 }
                 Err(_) => {
-                    lines.push(plain_line(line));
+                    lines.push(plain_line(strip_line_endings(&sanitized)));
                 }
             }
         } else {
-            lines.push(plain_line(line));
+            let sanitized = sanitize_line(raw_line);
+            lines.push(plain_line(strip_line_endings(&sanitized)));
         }
     }
 
@@ -363,6 +367,25 @@ fn preview_file(
     }
 
     (title, lines, truncated, None)
+}
+
+fn strip_line_endings(s: &str) -> &str {
+    let s = s.strip_suffix('\n').unwrap_or(s);
+    s.strip_suffix('\r').unwrap_or(s)
+}
+
+fn sanitize_line(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\t' => out.push_str("    "),
+            '\r' => {}
+            // Avoid raw ANSI/control chars affecting terminal state.
+            c if c.is_control() && c != '\n' => out.push('�'),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn find_syntax<'a>(

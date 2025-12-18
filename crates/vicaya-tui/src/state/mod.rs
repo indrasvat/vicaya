@@ -110,6 +110,8 @@ pub enum FocusTarget {
     Input,
     /// Results list is focused
     Results,
+    /// Preview pane is focused
+    Preview,
 }
 
 /// Search state
@@ -146,6 +148,7 @@ impl SearchState {
         self.focus = match self.focus {
             FocusTarget::Input => FocusTarget::Results,
             FocusTarget::Results => FocusTarget::Input,
+            FocusTarget::Preview => FocusTarget::Input,
         };
     }
 
@@ -157,6 +160,11 @@ impl SearchState {
     /// Check if results are focused
     pub fn is_results_focused(&self) -> bool {
         self.focus == FocusTarget::Results
+    }
+
+    /// Check if preview is focused
+    pub fn is_preview_focused(&self) -> bool {
+        self.focus == FocusTarget::Preview
     }
 
     /// Update query
@@ -252,6 +260,8 @@ pub struct UiState {
     pub scroll_offset: usize,
     /// Viewport height
     pub viewport_height: usize,
+    /// Viewport height for preview content (in lines, excluding borders)
+    pub preview_viewport_height: usize,
     /// Drishti switcher state
     pub drishti_switcher: DrishtiSwitcherState,
 }
@@ -262,6 +272,7 @@ impl UiState {
         Self {
             scroll_offset: 0,
             viewport_height: 0,
+            preview_viewport_height: 0,
             drishti_switcher: DrishtiSwitcherState::new(),
         }
     }

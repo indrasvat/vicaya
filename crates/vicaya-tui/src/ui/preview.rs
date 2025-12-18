@@ -22,7 +22,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         format!("purvadarshana — {}{truncated}", app.preview.title)
     };
 
-    let border_style = Style::default().fg(ui::BORDER_DIM);
+    let border_style = if app.search.is_preview_focused() {
+        Style::default().fg(ui::BORDER_FOCUS)
+    } else {
+        Style::default().fg(ui::BORDER_DIM)
+    };
 
     let text = if !app.preview.is_visible {
         vec![Line::raw("")]

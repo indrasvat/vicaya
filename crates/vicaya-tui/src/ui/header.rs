@@ -12,11 +12,11 @@ use ratatui::{
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     let drishti = format!(
-        "drishti  {} ({})",
+        "drishti: {} ({})",
         app.view.label(),
         app.view.english_hint()
     );
-    let ksetra = "ksetra  global";
+    let ksetra = "ksetra: global";
 
     let (rakshaka_text, rakshaka_color, suchi_text, reconciling) =
         if let Some(status) = &app.daemon_status {
@@ -38,6 +38,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
             )
         };
 
+    let sep = Span::styled(" | ", Style::default().fg(ui::TEXT_MUTED));
+
     let mut spans = vec![
         Span::styled(
             "vicaya",
@@ -45,25 +47,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
                 .fg(ui::PRIMARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ", Style::default()),
-        Span::styled("👁 ", Style::default().fg(ui::ACCENT)),
+        sep.clone(),
+        Span::styled("◎ ", Style::default().fg(ui::ACCENT)),
         Span::styled(drishti, Style::default().fg(ui::ACCENT)),
-        Span::styled("  ", Style::default()),
-        Span::styled("🧭 ", Style::default().fg(ui::TEXT_SECONDARY)),
+        sep.clone(),
+        Span::styled("⌁ ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled(ksetra, Style::default().fg(ui::TEXT_SECONDARY)),
-        Span::styled("  ", Style::default()),
-        Span::styled("🛡 ", Style::default().fg(rakshaka_color)),
+        sep.clone(),
         Span::styled("● ", Style::default().fg(rakshaka_color)),
         Span::styled(rakshaka_text, Style::default().fg(rakshaka_color)),
-        Span::styled("  ", Style::default()),
-        Span::styled("🗂 ", Style::default().fg(ui::INFO)),
+        sep.clone(),
+        Span::styled("≡ ", Style::default().fg(ui::INFO)),
         Span::styled(suchi_text, Style::default().fg(ui::INFO)),
     ];
 
     if reconciling {
         spans.push(Span::styled("  ", Style::default()));
         spans.push(Span::styled(
-            "🔄 reconciling…",
+            "reconciling…",
             Style::default()
                 .fg(ui::WARNING)
                 .add_modifier(Modifier::ITALIC),

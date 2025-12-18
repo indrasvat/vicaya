@@ -50,12 +50,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
                 Span::raw(" "),
             ];
 
-            if app.view == crate::state::ViewKind::Sthana {
-                spans.push(Span::styled("📁 ", Style::default().fg(ui::ACCENT)));
-            }
+            let (name, name_style) = if app.view == crate::state::ViewKind::Sthana {
+                (format!("{}/", result.name), Style::default().fg(ui::ACCENT))
+            } else {
+                (result.name.clone(), Style::default().fg(ui::TEXT_PRIMARY))
+            };
 
             spans.extend(vec![
-                Span::styled(&result.name, Style::default().fg(ui::TEXT_PRIMARY)),
+                Span::styled(name, name_style),
                 Span::raw(" "),
                 Span::styled(
                     format!("({}) ", display_path),

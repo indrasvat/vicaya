@@ -288,6 +288,9 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
         // Toggle preview
         (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
             app.preview.toggle();
+            if !app.preview.is_visible && app.search.is_preview_focused() {
+                app.search.focus = crate::state::FocusTarget::Results;
+            }
             return;
         }
         // Help
@@ -297,12 +300,18 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
         }
         // Toggle focus with Tab
         (KeyCode::Tab, KeyModifiers::NONE) => {
-            app.search.toggle_focus();
+            cycle_focus_forward(app);
+            return;
+        }
+        (KeyCode::BackTab, _) => {
+            cycle_focus_backward(app);
             return;
         }
         // Escape clears search or changes focus
         (KeyCode::Esc, KeyModifiers::NONE) => {
-            if app.search.is_results_focused() {
+            if app.search.is_preview_focused() {
+                app.search.focus = crate::state::FocusTarget::Results;
+            } else if app.search.is_results_focused() {
                 app.search.focus = crate::state::FocusTarget::Input;
             } else {
                 app.search.clear_query();
@@ -315,8 +324,10 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
     // Focus-specific keys
     if app.search.is_input_focused() {
         handle_input_keys(app, key, modifiers);
-    } else {
+    } else if app.search.is_results_focused() {
         handle_results_keys(app, key, modifiers);
+    } else {
+        handle_preview_keys(app, key, modifiers);
     }
 }
 
@@ -355,17 +366,14 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         (KeyCode::Up, KeyModifiers::NONE) if app.search.selected_index == 0 => {
             app.search.focus = crate::state::FocusTarget::Input;
         }
-        // Preview scrolling (when visible)
-        (KeyCode::PageUp, KeyModifiers::NONE) | (KeyCode::Char('u'), KeyModifiers::CONTROL)
-            if app.preview.is_visible =>
-        {
-            app.preview.scroll = app.preview.scroll.saturating_sub(10);
+        // Page navigation
+        (KeyCode::PageUp, KeyModifiers::NONE) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            let step = app.ui.viewport_height.max(1) as isize;
+            move_selection_by(app, -step);
         }
-        (KeyCode::PageDown, KeyModifiers::NONE) | (KeyCode::Char('d'), KeyModifiers::CONTROL)
-            if app.preview.is_visible =>
-        {
-            let max_scroll = app.preview.lines.len().saturating_sub(1) as u16;
-            app.preview.scroll = (app.preview.scroll + 10).min(max_scroll);
+        (KeyCode::PageDown, KeyModifiers::NONE) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            let step = app.ui.viewport_height.max(1) as isize;
+            move_selection_by(app, step);
         }
         // Navigation - vi keys and arrows
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
@@ -408,6 +416,87 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         }
         _ => {}
     }
+}
+
+/// Handle keys when preview is focused
+fn handle_preview_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
+            scroll_preview_by(app, 1);
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, KeyModifiers::NONE) => {
+            scroll_preview_by(app, -1);
+        }
+        (KeyCode::PageDown, KeyModifiers::NONE) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            let step = app.ui.preview_viewport_height.max(1) as i32;
+            scroll_preview_by(app, step);
+        }
+        (KeyCode::PageUp, KeyModifiers::NONE) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            let step = app.ui.preview_viewport_height.max(1) as i32;
+            scroll_preview_by(app, -step);
+        }
+        (KeyCode::Char('g'), KeyModifiers::NONE) => {
+            app.preview.scroll = 0;
+        }
+        (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
+            app.preview.scroll = preview_max_scroll(app);
+        }
+        _ => {}
+    }
+}
+
+fn cycle_focus_forward(app: &mut AppState) {
+    let has_preview = app.preview.is_visible;
+    app.search.focus = match app.search.focus {
+        crate::state::FocusTarget::Input => crate::state::FocusTarget::Results,
+        crate::state::FocusTarget::Results => {
+            if has_preview {
+                crate::state::FocusTarget::Preview
+            } else {
+                crate::state::FocusTarget::Input
+            }
+        }
+        crate::state::FocusTarget::Preview => crate::state::FocusTarget::Input,
+    };
+}
+
+fn cycle_focus_backward(app: &mut AppState) {
+    let has_preview = app.preview.is_visible;
+    app.search.focus = match app.search.focus {
+        crate::state::FocusTarget::Input => {
+            if has_preview {
+                crate::state::FocusTarget::Preview
+            } else {
+                crate::state::FocusTarget::Results
+            }
+        }
+        crate::state::FocusTarget::Results => crate::state::FocusTarget::Input,
+        crate::state::FocusTarget::Preview => crate::state::FocusTarget::Results,
+    };
+}
+
+fn move_selection_by(app: &mut AppState, delta: isize) {
+    if app.search.results.is_empty() {
+        return;
+    }
+
+    let len = app.search.results.len() as isize;
+    let current = app.search.selected_index as isize;
+    let next = (current + delta).clamp(0, len - 1);
+    app.search.selected_index = next as usize;
+}
+
+fn preview_max_scroll(app: &AppState) -> u16 {
+    let viewport = app.ui.preview_viewport_height.max(1);
+    let max_start = app.preview.lines.len().saturating_sub(viewport);
+    max_start.min(u16::MAX as usize) as u16
+}
+
+fn scroll_preview_by(app: &mut AppState, delta: i32) {
+    let current = app.preview.scroll as i32;
+    let max = preview_max_scroll(app) as i32;
+    let next = (current + delta).clamp(0, max);
+    app.preview.scroll = next as u16;
 }
 
 /// Open file in $EDITOR or fallback editor
@@ -529,9 +618,11 @@ fn render_search(f: &mut Frame, app: &mut AppState) {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
             .split(chunks[2]);
+        app.ui.preview_viewport_height = body[1].height.saturating_sub(2) as usize;
         ui::results::render(f, body[0], app);
         ui::preview::render(f, body[1], app);
     } else {
+        app.ui.preview_viewport_height = 0;
         ui::results::render(f, chunks[2], app);
     }
 
