@@ -1,8 +1,13 @@
 # Smart Abbreviation Matching Implementation Plan
 
 **Created:** 2025-11-27
-**Status:** In Progress
+**Status:** Implemented
 **Goal:** Enable developers to find files using abbreviations (e.g., "vcs" → "vicaya-core/src/main.rs")
+
+This document describes the original plan; the feature is implemented in:
+
+- `crates/vicaya-index/src/abbreviation.rs`
+- `crates/vicaya-index/src/query.rs`
 
 ---
 

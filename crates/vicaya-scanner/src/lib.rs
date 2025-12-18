@@ -61,7 +61,7 @@ impl Scanner {
             .into_iter()
             .filter_entry(|e| self.should_index(e.path()))
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
+            .filter(|e| e.file_type().is_file() || e.file_type().is_dir())
             .collect();
 
         debug!("Found {} files in {}", files.len(), root.display());
@@ -77,39 +77,7 @@ impl Scanner {
 
     /// Check if a path should be indexed.
     fn should_index(&self, path: &Path) -> bool {
-        for exclusion in &self.config.exclusions {
-            // Check if any path component matches the exclusion pattern
-            for component in path.components() {
-                // Skip root directory component
-                if matches!(component, std::path::Component::RootDir) {
-                    continue;
-                }
-
-                let component_str = component.as_os_str().to_string_lossy();
-
-                // Support glob patterns
-                if exclusion.contains('*') {
-                    // Simple glob matching: *.ext or prefix*
-                    if let Some(ext) = exclusion.strip_prefix("*.") {
-                        if component_str.ends_with(&format!(".{}", ext)) {
-                            return false;
-                        }
-                    } else if let Some(prefix) = exclusion.strip_suffix('*') {
-                        // Ignore empty prefix (bare "*" pattern)
-                        if !prefix.is_empty() && component_str.starts_with(prefix) {
-                            return false;
-                        }
-                    }
-                } else {
-                    // Exact component match
-                    if component_str == exclusion.as_str() {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        true
+        vicaya_core::filter::should_index_path(path, &self.config.exclusions)
     }
 
     /// Scan a single file and extract metadata.
@@ -155,6 +123,9 @@ impl Scanner {
             .file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
+        if name.is_empty() {
+            return;
+        }
 
         let (path_offset, path_len) = string_arena.add(&path_str);
         let (name_offset, name_len) = string_arena.add(&name);

@@ -12,3 +12,7 @@ vicaya-index = { path = "../vicaya-index" }
 tracing = { workspace = true }
 notify = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

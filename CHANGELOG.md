@@ -59,10 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- _Nothing yet_
+- Daemon reconciliation to self-heal when filesystem events are missed.
 
 ### Changed
-- _Nothing yet_
+- IPC responses are written atomically to avoid truncated JSON in clients.
 
 ### Deprecated
 - N/A
@@ -71,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - N/A
 
 ### Fixed
-- N/A
+- Daemon now reconciles missed filesystem changes on startup and on a daily schedule.
+- TUI/CLI no longer hit JSON parse errors from partial IPC reads/writes.
 
 ### Security
 - N/A
