@@ -60,9 +60,7 @@ fn cli_search_returns_json_results() {
     let corpus_root = TempDir::new().unwrap();
 
     // Create a tiny corpus with both “project” and “cache” lookalikes.
-    let project_server = corpus_root
-        .path()
-        .join("GolandProjects/spartan-ranker/server.go");
+    let project_server = corpus_root.path().join("Projects/example-app/server.go");
     write_file(&project_server);
 
     write_file(

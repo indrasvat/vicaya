@@ -15,7 +15,7 @@ fn it_ranks_project_files_above_dependency_caches_for_exact_name_ties() {
 
     assert_eq!(
         results[0].path,
-        "/Users/alice/GolandProjects/spartan-ranker/server.go",
+        "/Users/alice/Projects/example-app/server.go",
         "expected project server.go to rank first. got={:?}",
         results.iter().map(|r| r.path.as_str()).collect::<Vec<_>>()
     );
@@ -53,7 +53,7 @@ fn it_ranks_deep_project_files_above_dependency_caches_for_exact_name_ties() {
 
     assert_eq!(
         results[0].path,
-        "/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go",
+        "/Users/alice/Projects/example-app/handlers/search/search.go",
         "expected project search.go to rank first. got={:?}",
         results.iter().map(|r| r.path.as_str()).collect::<Vec<_>>()
     );
@@ -64,7 +64,7 @@ fn it_boosts_results_within_scope_over_out_of_scope_ties() {
     let files = support::corpus_files();
     let (table, arena, trigram_index) = support::build_snapshot(&files);
 
-    let scope = Some("/Users/alice/GolandProjects/spartan-ranker");
+    let scope = Some("/Users/alice/Projects/example-app");
     let results = support::run_query(&table, &arena, &trigram_index, "settings.json", scope, 20);
     assert!(
         !results.is_empty(),
@@ -73,7 +73,7 @@ fn it_boosts_results_within_scope_over_out_of_scope_ties() {
 
     assert_eq!(
         results[0].path,
-        "/Users/alice/GolandProjects/spartan-ranker/settings.json",
+        "/Users/alice/Projects/example-app/settings.json",
         "expected in-scope settings.json to rank first. got={:?}",
         results.iter().map(|r| r.path.as_str()).collect::<Vec<_>>()
     );

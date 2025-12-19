@@ -114,7 +114,7 @@ pub fn corpus_files() -> Vec<TestFile> {
             size: 999_999,
         },
         TestFile {
-            path: "/Users/alice/Projects/spartan-ranker/target/debug/build/log.txt",
+            path: "/Users/alice/Projects/example-app/target/debug/build/log.txt",
             name: "log.txt",
             mtime: 1_700_000_100,
             size: 10_000,
@@ -152,13 +152,13 @@ pub fn corpus_files() -> Vec<TestFile> {
         },
         // Projects (should be favored for exact filenames).
         TestFile {
-            path: "/Users/alice/GolandProjects/spartan-ranker/server.go",
+            path: "/Users/alice/Projects/example-app/server.go",
             name: "server.go",
             mtime: 1_770_000_000,
             size: 55_555,
         },
         TestFile {
-            path: "/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go",
+            path: "/Users/alice/Projects/example-app/handlers/search/search.go",
             name: "search.go",
             mtime: 1_770_000_050,
             size: 22_222,
@@ -182,13 +182,13 @@ pub fn corpus_files() -> Vec<TestFile> {
             size: 2_222,
         },
         TestFile {
-            path: "/Users/alice/GolandProjects/spartan-ranker/README.md",
+            path: "/Users/alice/Projects/example-app/README.md",
             name: "README.md",
             mtime: 1_770_000_100,
             size: 4_096,
         },
         TestFile {
-            path: "/Users/alice/GolandProjects/spartan-ranker/Dockerfile",
+            path: "/Users/alice/Projects/example-app/Dockerfile",
             name: "Dockerfile",
             mtime: 1_770_000_200,
             size: 1_024,
@@ -202,7 +202,7 @@ pub fn corpus_files() -> Vec<TestFile> {
             size: 1_000,
         },
         TestFile {
-            path: "/Users/alice/GolandProjects/spartan-ranker/settings.json",
+            path: "/Users/alice/Projects/example-app/settings.json",
             name: "settings.json",
             mtime: 1_760_000_000,
             size: 1_000,
@@ -222,14 +222,12 @@ pub fn query_suite() -> Vec<QueryCase> {
         QueryCase {
             query: "server.go",
             scope: None,
-            relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/server.go"],
+            relevant_paths: &["/Users/alice/Projects/example-app/server.go"],
         },
         QueryCase {
             query: "search.go",
             scope: None,
-            relevant_paths: &[
-                "/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go",
-            ],
+            relevant_paths: &["/Users/alice/Projects/example-app/handlers/search/search.go"],
         },
         QueryCase {
             query: "Info.plist",
@@ -248,8 +246,8 @@ pub fn query_suite() -> Vec<QueryCase> {
         },
         QueryCase {
             query: "settings.json",
-            scope: Some("/Users/alice/GolandProjects/spartan-ranker"),
-            relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/settings.json"],
+            scope: Some("/Users/alice/Projects/example-app"),
+            relevant_paths: &["/Users/alice/Projects/example-app/settings.json"],
         },
         QueryCase {
             query: "invoice",

@@ -47,7 +47,7 @@ fn is_noise_path(path: &str) -> bool {
 
 fn bucket_id(path: &str) -> String {
     // Top-level bucket under a home dir (macOS-ish paths).
-    // Example: /Users/alice/GolandProjects/... -> "GolandProjects"
+    // Example: /Users/alice/Projects/... -> "Projects"
     let comps: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
     if comps.len() >= 3 && comps[0] == "Users" {
         return comps[2].to_string();

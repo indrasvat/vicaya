@@ -194,11 +194,11 @@ mod tests {
 
     #[test]
     fn test_should_index_substring_not_excluded() {
-        // REGRESSION TEST: "bin" should NOT match "robinsharma" (substring)
+        // REGRESSION TEST: "bin" should NOT match a username containing it as a substring.
         let scanner = make_scanner(vec!["bin".to_string()]);
 
-        assert!(scanner.should_index(Path::new("/Users/robinsharma/Documents/file.txt")));
-        assert!(scanner.should_index(Path::new("/home/robin/test.txt")));
+        assert!(scanner.should_index(Path::new("/Users/examplebinuser/Documents/file.txt")));
+        assert!(scanner.should_index(Path::new("/home/examplebinuser/test.txt")));
         assert!(scanner.should_index(Path::new("/combined/path/file.txt")));
     }
 

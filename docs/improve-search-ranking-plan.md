@@ -25,7 +25,7 @@ Next up (planned):
 
 ## 1. Problem Statement
 
-Searching for a common filename (e.g., `server.go`) currently returns a wall of identical-looking matches from dependency caches (e.g., `~/go/pkg/mod/...`) while the “obvious” project file (e.g., `~/GolandProjects/spartan-ranker/server.go`) can be missing from the top results.
+Searching for a common filename (e.g., `server.go`) currently returns a wall of identical-looking matches from dependency caches (e.g., `~/go/pkg/mod/...`) while the “obvious” project file (e.g., `~/Projects/example-app/server.go`) can be missing from the top results.
 
 This feels wrong in practice because:
 - The user intent for a bare filename query is usually “my project file”, not “some dependency’s file with the same name”.
@@ -197,7 +197,7 @@ Then sort by:
 4. `path_depth` ascending (shallower first)
 5. `path` ascending (deterministic final tie-break)
 
-This solves the `server.go` tie case immediately: all exact matches tie on `match_score`, and the cache penalty + depth penalty pushes `~/go/pkg/mod/...` below `~/GolandProjects/...`.
+This solves the `server.go` tie case immediately: all exact matches tie on `match_score`, and the cache penalty + depth penalty pushes `~/go/pkg/mod/...` below `~/Projects/...`.
 
 ### 4.5 Optional: result diversification (“don’t show 10 copies from the same cache”)
 
@@ -221,7 +221,7 @@ This should be enabled only in the “high-tie” case (exact basename / stem ma
   - Compute `context_score` as a small additive value.
 - Sort by the tuple described in §4.4.
 - Add unit tests demonstrating:
-  - `~/GolandProjects/spartan-ranker/server.go` ranks above `~/go/pkg/mod/.../server.go` for query `server.go`.
+  - `~/Projects/example-app/server.go` ranks above `~/go/pkg/mod/.../server.go` for query `server.go`.
   - Deterministic ordering for equal candidates.
 
 ### Phase 2: Make it configurable (no “magic” without an escape hatch)
@@ -283,7 +283,7 @@ Ranking work is notoriously easy to “feel better” while silently regressing 
 Create a small, synthetic filesystem tree used only for ranking evaluation. It must include:
 
 - **User-like content**
-  - `~/Documents/`-style: `invoice_2024.pdf`, `taxes_2023.xlsx`, `meeting-notes.txt`, `resume_robin.pdf`
+  - `~/Documents/`-style: `invoice_2024.pdf`, `taxes_2023.xlsx`, `meeting-notes.txt`, `resume.pdf`
   - `~/Downloads/`-style: `Screenshot_2025-12-18.png`, `IMG_0001.JPG`, `report-final(1).pdf`
   - “Projects”: a few repo-shaped trees with common filenames (`server.go`, `main.rs`, `index.ts`, `README.md`, `Dockerfile`)
 - **Noise sources that should not dominate**
@@ -305,7 +305,7 @@ Add tests that:
 - and assert ordering invariants.
 
 Examples (invariants, not brittle full lists):
-- For query `server.go`, `.../Projects/spartan-ranker/server.go` must rank above `.../go/pkg/mod/.../server.go`.
+- For query `server.go`, `.../Projects/example-app/server.go` must rank above `.../go/pkg/mod/.../server.go`.
 - For query `invoice`, a document in `Documents/` must rank above a log file in `Library/Caches/...` that happens to match.
 - For query `node_modules`, results inside `node_modules/` should still appear (penalty must not “hide” them; it only reorders when there are alternatives).
 
@@ -336,7 +336,7 @@ Create a table of ~30–60 queries grouped by intent, not by programming languag
 - **Short queries** (linear scan path): `go`, `cv`, `db`
 - **Mixed-case / abbreviations**: `CT` (Cargo.toml), `vcs`-like cases
 - **Numbers/dates**: `2025-12-18`, `2024`, `v0.34.0`
-- **Directories**: `spartan-ranker` (ensure directory search behaves well too)
+- **Directories**: `example-app` (ensure directory search behaves well too)
 
 Each query should have a small set of “relevant” expected results for the synthetic corpus.
 
