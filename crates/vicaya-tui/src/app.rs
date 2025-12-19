@@ -99,6 +99,7 @@ fn run_app<B: ratatui::backend::Backend>(
     let mut last_query = String::new();
     let mut last_search_sent_at = std::time::Instant::now();
     let mut last_view = app.view;
+    let mut last_ksetra = app.ksetra.current().cloned();
     let mut search_id: u64 = 0;
     let mut active_search_id: u64 = 0;
 
@@ -162,16 +163,25 @@ fn run_app<B: ratatui::backend::Backend>(
         // Re-run the current search when switching drishti.
         if app.view != last_view {
             last_view = app.view;
-            app.search.is_searching = true;
-            search_id = search_id.wrapping_add(1);
-            active_search_id = search_id;
-            let _ = cmd_tx.send(WorkerCommand::Search {
-                id: active_search_id,
-                query: app.search.query.clone(),
-                limit: 100,
-                view: app.view,
-            });
-            last_search_sent_at = std::time::Instant::now();
+            trigger_search(
+                &cmd_tx,
+                app,
+                &mut search_id,
+                &mut active_search_id,
+                &mut last_search_sent_at,
+            );
+        }
+
+        // Re-run the current search when changing ksetra scope.
+        if app.ksetra.current() != last_ksetra.as_ref() {
+            last_ksetra = app.ksetra.current().cloned();
+            trigger_search(
+                &cmd_tx,
+                app,
+                &mut search_id,
+                &mut active_search_id,
+                &mut last_search_sent_at,
+            );
         }
 
         // Check if query changed and trigger search (with debounce)
@@ -179,16 +189,13 @@ fn run_app<B: ratatui::backend::Backend>(
             let elapsed = last_search_sent_at.elapsed();
             if elapsed > std::time::Duration::from_millis(150) || app.search.query.is_empty() {
                 last_query = app.search.query.clone();
-                app.search.is_searching = true;
-                search_id = search_id.wrapping_add(1);
-                active_search_id = search_id;
-                let _ = cmd_tx.send(WorkerCommand::Search {
-                    id: active_search_id,
-                    query: app.search.query.clone(),
-                    limit: 100,
-                    view: app.view,
-                });
-                last_search_sent_at = std::time::Instant::now();
+                trigger_search(
+                    &cmd_tx,
+                    app,
+                    &mut search_id,
+                    &mut active_search_id,
+                    &mut last_search_sent_at,
+                );
             }
         }
 
@@ -247,14 +254,33 @@ fn handle_drishti_switcher_keys(app: &mut AppState, key: KeyCode, modifiers: Key
     match (key, modifiers) {
         (KeyCode::Esc, _) => app.toggle_drishti_switcher(),
         (KeyCode::Char('t'), KeyModifiers::CONTROL) => app.toggle_drishti_switcher(),
-        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
+        (KeyCode::Backspace, KeyModifiers::NONE) => {
+            app.ui.drishti_switcher.pop_filter_char();
+        }
+        (KeyCode::Down, KeyModifiers::NONE) => {
             app.ui.drishti_switcher.select_next();
         }
-        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, KeyModifiers::NONE) => {
+        (KeyCode::Up, KeyModifiers::NONE) => {
             app.ui.drishti_switcher.select_previous();
         }
+        (KeyCode::Char('j'), KeyModifiers::NONE) => {
+            if app.ui.drishti_switcher.filter_query().is_empty() {
+                app.ui.drishti_switcher.select_next();
+            } else {
+                app.ui.drishti_switcher.push_filter_char('j');
+            }
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) => {
+            if app.ui.drishti_switcher.filter_query().is_empty() {
+                app.ui.drishti_switcher.select_previous();
+            } else {
+                app.ui.drishti_switcher.push_filter_char('k');
+            }
+        }
         (KeyCode::Enter, KeyModifiers::NONE) => {
-            let selected = app.ui.drishti_switcher.selected_view();
+            let Some(selected) = app.ui.drishti_switcher.selected_view() else {
+                return;
+            };
             if selected.is_enabled() {
                 app.view = selected;
                 app.toggle_drishti_switcher();
@@ -265,6 +291,11 @@ fn handle_drishti_switcher_keys(app: &mut AppState, key: KeyCode, modifiers: Key
                     selected.english_hint()
                 ));
                 app.toggle_drishti_switcher();
+            }
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE) => {
+            if !c.is_whitespace() {
+                app.ui.drishti_switcher.push_filter_char(c);
             }
         }
         _ => {}
@@ -291,6 +322,12 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
             if !app.preview.is_visible && app.search.is_preview_focused() {
                 app.search.focus = crate::state::FocusTarget::Results;
             }
+            return;
+        }
+        // Cycle Varga (grouping)
+        (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+            app.ui.grouping = app.ui.grouping.next();
+            app.ui.scroll_offset = 0;
             return;
         }
         // Help
@@ -388,10 +425,32 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
             app.search.select_last();
         }
+        // Ksetra navigation (scope stack)
+        (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, KeyModifiers::NONE) => {
+            if app.ksetra.pop().is_some() {
+                app.clear_results();
+                app.preview.clear();
+                app.ui.scroll_offset = 0;
+                app.search.is_searching = true;
+            } else {
+                app.error = Some("ksetra is already global".to_string());
+            }
+        }
+        (KeyCode::Char('l'), KeyModifiers::NONE) | (KeyCode::Right, KeyModifiers::NONE) => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                if is_dir(&path, app.view) {
+                    push_ksetra(app, path);
+                }
+            }
+        }
         // File actions
         (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Char('o'), KeyModifiers::NONE) => {
             if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
-                open_in_editor(&path, app);
+                if is_dir(&path, app.view) {
+                    push_ksetra(app, path);
+                } else {
+                    open_in_editor(&path, app);
+                }
             }
         }
         (KeyCode::Char('y'), KeyModifiers::NONE) => {
@@ -506,6 +565,45 @@ fn open_in_editor(path: &str, app: &mut AppState) {
     app.quit();
 }
 
+fn is_dir(path: &str, view: crate::state::ViewKind) -> bool {
+    if view == crate::state::ViewKind::Sthana {
+        return true;
+    }
+
+    std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
+}
+
+fn push_ksetra(app: &mut AppState, path: String) {
+    app.ksetra.push(std::path::PathBuf::from(path));
+    app.clear_results();
+    app.preview.clear();
+    app.ui.scroll_offset = 0;
+    app.search.is_searching = true;
+}
+
+fn trigger_search(
+    cmd_tx: &mpsc::Sender<WorkerCommand>,
+    app: &mut AppState,
+    search_id: &mut u64,
+    active_search_id: &mut u64,
+    last_search_sent_at: &mut std::time::Instant,
+) {
+    let parsed = crate::state::parse_query(&app.search.query);
+
+    app.search.is_searching = true;
+    *search_id = (*search_id).wrapping_add(1);
+    *active_search_id = *search_id;
+    let _ = cmd_tx.send(WorkerCommand::Search {
+        id: *active_search_id,
+        query: parsed.term,
+        limit: 100,
+        view: app.view,
+        scope: app.ksetra.current().cloned(),
+        niyamas: parsed.niyamas,
+    });
+    *last_search_sent_at = std::time::Instant::now();
+}
+
 /// Copy path to clipboard
 fn copy_to_clipboard(path: &str, app: &mut AppState) {
     use std::process::Command;
@@ -604,7 +702,7 @@ fn render_search(f: &mut Frame, app: &mut AppState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
-            Constraint::Length(3), // Search input
+            Constraint::Length(4), // Search input + niyamas
             Constraint::Min(0),    // Body
             Constraint::Length(1), // Status bar
         ])

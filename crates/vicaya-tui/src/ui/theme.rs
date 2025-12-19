@@ -17,8 +17,8 @@ pub const ACCENT_DIM: Color = Color::Rgb(80, 180, 183); // #50B4B7 - Dimmed cyan
 
 /// Text colors
 pub const TEXT_PRIMARY: Color = Color::Rgb(230, 230, 235); // #E6E6EB - High contrast
-pub const TEXT_SECONDARY: Color = Color::Rgb(160, 160, 170); // #A0A0AA - Secondary text
-pub const TEXT_MUTED: Color = Color::Rgb(100, 100, 110); // #64646E - Muted text
+pub const TEXT_SECONDARY: Color = Color::Rgb(180, 180, 192); // #B4B4C0 - Secondary text
+pub const TEXT_MUTED: Color = Color::Rgb(130, 130, 142); // #82828E - Muted text
 
 /// Semantic colors
 pub const SUCCESS: Color = Color::Rgb(118, 218, 133); // #76DA85 - Green

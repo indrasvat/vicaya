@@ -87,9 +87,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
 fn segment_style(style: crate::state::TextStyle) -> Style {
     let mut out = match style.kind {
         TextKind::Normal => Style::default().fg(ui::TEXT_PRIMARY),
-        TextKind::Meta => Style::default()
-            .fg(ui::TEXT_MUTED)
-            .add_modifier(Modifier::DIM),
+        TextKind::Meta => Style::default().fg(ui::TEXT_MUTED),
         TextKind::Error => Style::default().fg(ui::ERROR).add_modifier(Modifier::BOLD),
     };
 

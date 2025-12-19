@@ -1,7 +1,7 @@
 //! Background worker for daemon IPC and preview loading.
 
 use crate::client::{DaemonStatus, IpcClient};
-use crate::state::{StyledLine, StyledSegment, TextKind, TextStyle, ViewKind};
+use crate::state::{Niyama, NiyamaType, StyledLine, StyledSegment, TextKind, TextStyle, ViewKind};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 use vicaya_index::SearchResult;
@@ -19,6 +19,8 @@ pub enum WorkerCommand {
         query: String,
         limit: usize,
         view: ViewKind,
+        scope: Option<std::path::PathBuf>,
+        niyamas: Vec<Niyama>,
     },
     Preview {
         id: u64,
@@ -60,7 +62,17 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
     let themes = ThemeSet::load_defaults();
     let theme = pick_theme(&themes);
 
-    let mut pending_search: Option<(u64, String, usize, ViewKind)> = None;
+    #[derive(Debug)]
+    struct PendingSearch {
+        id: u64,
+        query: String,
+        limit: usize,
+        view: ViewKind,
+        scope: Option<std::path::PathBuf>,
+        niyamas: Vec<Niyama>,
+    }
+
+    let mut pending_search: Option<PendingSearch> = None;
     let mut pending_preview: Option<(u64, String)> = None;
 
     loop {
@@ -72,7 +84,18 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     query,
                     limit,
                     view,
-                } => pending_search = Some((id, query, limit, view)),
+                    scope,
+                    niyamas,
+                } => {
+                    pending_search = Some(PendingSearch {
+                        id,
+                        query,
+                        limit,
+                        view,
+                        scope,
+                        niyamas,
+                    })
+                }
                 WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
                 WorkerCommand::Quit => break,
             },
@@ -88,7 +111,18 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     query,
                     limit,
                     view,
-                } => pending_search = Some((id, query, limit, view)),
+                    scope,
+                    niyamas,
+                } => {
+                    pending_search = Some(PendingSearch {
+                        id,
+                        query,
+                        limit,
+                        view,
+                        scope,
+                        niyamas,
+                    })
+                }
                 WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
                 WorkerCommand::Quit => return,
             }
@@ -101,7 +135,15 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             last_status_at = Instant::now();
         }
 
-        if let Some((id, query, limit, view)) = pending_search.take() {
+        if let Some(PendingSearch {
+            id,
+            query,
+            limit,
+            view,
+            scope,
+            niyamas,
+        }) = pending_search.take()
+        {
             let trimmed = query.trim().to_string();
             if trimmed.is_empty() {
                 let _ = evt_tx.send(WorkerEvent::SearchResults {
@@ -123,14 +165,9 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     }
                 };
 
-                // Drishti-specific filtering (best-effort).
-                if view == ViewKind::Sthana {
-                    results.retain(|r| {
-                        std::fs::metadata(&r.path)
-                            .map(|m| m.is_dir())
-                            .unwrap_or(false)
-                    });
-                }
+                // Scope + Niyama filtering (best-effort).
+                let scope = scope.as_deref();
+                results.retain(|r| matches_filters(r, view, scope, &niyamas));
 
                 let _ = evt_tx.send(WorkerEvent::SearchResults {
                     id,
@@ -154,6 +191,77 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             }
         }
     }
+}
+
+fn matches_filters(
+    result: &SearchResult,
+    view: ViewKind,
+    scope: Option<&std::path::Path>,
+    niyamas: &[Niyama],
+) -> bool {
+    let path = std::path::Path::new(&result.path);
+
+    if let Some(scope) = scope {
+        if !path.starts_with(scope) {
+            return false;
+        }
+    }
+
+    let needs_kind =
+        view == ViewKind::Sthana || niyamas.iter().any(|n| matches!(n, Niyama::Type { .. }));
+    let mut kind: Option<NiyamaType> = None;
+    if needs_kind {
+        kind = std::fs::metadata(path).ok().map(|m| {
+            if m.is_dir() {
+                NiyamaType::Dir
+            } else {
+                NiyamaType::File
+            }
+        });
+    }
+
+    if view == ViewKind::Sthana && kind != Some(NiyamaType::Dir) {
+        return false;
+    }
+
+    for niyama in niyamas {
+        match niyama {
+            Niyama::Type { kind: want, .. } => {
+                if kind != Some(*want) {
+                    return false;
+                }
+            }
+            Niyama::Ext { exts, .. } => {
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase());
+                let Some(ext) = ext else {
+                    return false;
+                };
+                if !exts.iter().any(|e| e == &ext) {
+                    return false;
+                }
+            }
+            Niyama::Path { needle, .. } => {
+                if !result.path.to_lowercase().contains(needle) {
+                    return false;
+                }
+            }
+            Niyama::Mtime { cmp, .. } => {
+                if !cmp.op.matches_i64(result.mtime, cmp.value) {
+                    return false;
+                }
+            }
+            Niyama::Size { cmp, .. } => {
+                if !cmp.op.matches_u64(result.size, cmp.value) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
 }
 
 fn pick_theme(themes: &ThemeSet) -> &Theme {
@@ -421,4 +529,95 @@ fn syntect_style_to_text_style(style: syntect::highlighting::Style) -> TextStyle
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{CmpOp, CmpU64};
+    use tempfile::tempdir;
+
+    #[test]
+    fn matches_filters_applies_scope_and_size() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("foo.rs");
+        std::fs::write(&file_path, "hello").unwrap();
+
+        let r = SearchResult {
+            path: file_path.to_string_lossy().to_string(),
+            name: "foo.rs".to_string(),
+            score: 1.0,
+            size: 5,
+            mtime: 0,
+        };
+
+        let scope = dir.path();
+        let niyamas = vec![Niyama::Size {
+            cmp: CmpU64 {
+                op: CmpOp::Gt,
+                value: 1,
+            },
+            raw: "size:>1b".to_string(),
+        }];
+
+        assert!(matches_filters(&r, ViewKind::Patra, Some(scope), &niyamas));
+    }
+
+    #[test]
+    fn matches_filters_applies_type_and_ext() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("foo.rs");
+        let dir_path = dir.path().join("bar");
+        std::fs::write(&file_path, "hello").unwrap();
+        std::fs::create_dir_all(&dir_path).unwrap();
+
+        let file = SearchResult {
+            path: file_path.to_string_lossy().to_string(),
+            name: "foo.rs".to_string(),
+            score: 1.0,
+            size: 0,
+            mtime: 0,
+        };
+        let subdir = SearchResult {
+            path: dir_path.to_string_lossy().to_string(),
+            name: "bar".to_string(),
+            score: 1.0,
+            size: 0,
+            mtime: 0,
+        };
+
+        let type_dir = vec![Niyama::Type {
+            kind: NiyamaType::Dir,
+            raw: "type:dir".to_string(),
+        }];
+        assert!(matches_filters(
+            &subdir,
+            ViewKind::Patra,
+            Some(dir.path()),
+            &type_dir
+        ));
+        assert!(!matches_filters(
+            &file,
+            ViewKind::Patra,
+            Some(dir.path()),
+            &type_dir
+        ));
+
+        let ext_rs = vec![Niyama::Ext {
+            exts: vec!["rs".to_string()],
+            raw: "ext:rs".to_string(),
+        }];
+        assert!(matches_filters(
+            &file,
+            ViewKind::Patra,
+            Some(dir.path()),
+            &ext_rs
+        ));
+        assert!(!matches_filters(
+            &subdir,
+            ViewKind::Patra,
+            Some(dir.path()),
+            &ext_rs
+        ));
+    }
 }
