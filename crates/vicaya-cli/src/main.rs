@@ -125,9 +125,17 @@ fn main() -> Result<()> {
 fn search(query: &str, limit: usize, format: &str) -> Result<()> {
     // Auto-start daemon if not running
     if !vicaya_core::daemon::is_running() {
-        println!("Daemon is not running. Starting daemon...");
+        if format == "json" {
+            eprintln!("Daemon is not running. Starting daemon...");
+        } else {
+            println!("Daemon is not running. Starting daemon...");
+        }
         let pid = vicaya_core::daemon::start_daemon()?;
-        println!("✓ Daemon started (PID: {})", pid);
+        if format == "json" {
+            eprintln!("✓ Daemon started (PID: {})", pid);
+        } else {
+            println!("✓ Daemon started (PID: {})", pid);
+        }
 
         // Wait a moment for daemon to initialize
         std::thread::sleep(std::time::Duration::from_millis(500));
