@@ -72,6 +72,39 @@ pub fn corpus_files() -> Vec<TestFile> {
             mtime: 1_600_000_200,
             size: 34_567,
         },
+        // Xcode DerivedData noise (common on macOS).
+        TestFile {
+            path: "/Users/alice/Library/Developer/Xcode/DerivedData/MyApp-abc123/Build/Intermediates.noindex/MyApp.build/Debug-iphonesimulator/MyApp.build/Info.plist",
+            name: "Info.plist",
+            mtime: 1_600_000_250,
+            size: 4_000,
+        },
+        // Build tool caches.
+        TestFile {
+            path: "/Users/alice/.gradle/caches/modules-2/files-2.1/com.example/foo/1.0.0/foo-1.0.0.pom",
+            name: "pom.xml",
+            mtime: 1_600_000_260,
+            size: 3_333,
+        },
+        TestFile {
+            path: "/Users/alice/.m2/repository/com/example/foo/1.0.0/foo-1.0.0.pom",
+            name: "pom.xml",
+            mtime: 1_600_000_270,
+            size: 3_333,
+        },
+        TestFile {
+            path: "/Users/alice/.nuget/packages/newtonsoft.json/13.0.3/build/net45/Newtonsoft.Json.props",
+            name: "Newtonsoft.Json.props",
+            mtime: 1_600_000_280,
+            size: 1_111,
+        },
+        // Python environment noise.
+        TestFile {
+            path: "/Users/alice/Projects/pyapp/.venv/lib/python3.12/site-packages/requests/sessions.py",
+            name: "sessions.py",
+            mtime: 1_600_000_290,
+            size: 9_999,
+        },
         // Tool state / caches.
         TestFile {
             path: "/Users/alice/Library/Caches/app/cache/invoice_2024.pdf",
@@ -130,6 +163,24 @@ pub fn corpus_files() -> Vec<TestFile> {
             size: 22_222,
         },
         TestFile {
+            path: "/Users/alice/Projects/ios-app/Info.plist",
+            name: "Info.plist",
+            mtime: 1_770_000_060,
+            size: 5_000,
+        },
+        TestFile {
+            path: "/Users/alice/Projects/java-app/pom.xml",
+            name: "pom.xml",
+            mtime: 1_770_000_070,
+            size: 6_666,
+        },
+        TestFile {
+            path: "/Users/alice/Projects/pyapp/sessions.py",
+            name: "sessions.py",
+            mtime: 1_770_000_080,
+            size: 2_222,
+        },
+        TestFile {
             path: "/Users/alice/GolandProjects/spartan-ranker/README.md",
             name: "README.md",
             mtime: 1_770_000_100,
@@ -160,6 +211,18 @@ pub fn query_suite() -> Vec<QueryCase> {
         QueryCase {
             query: "search.go",
             relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go"],
+        },
+        QueryCase {
+            query: "Info.plist",
+            relevant_paths: &["/Users/alice/Projects/ios-app/Info.plist"],
+        },
+        QueryCase {
+            query: "pom.xml",
+            relevant_paths: &["/Users/alice/Projects/java-app/pom.xml"],
+        },
+        QueryCase {
+            query: "sessions.py",
+            relevant_paths: &["/Users/alice/Projects/pyapp/sessions.py"],
         },
         QueryCase {
             query: "invoice",

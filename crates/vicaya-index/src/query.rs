@@ -224,9 +224,31 @@ impl<'a> QueryEngine<'a> {
         if path_lower.contains("/.rustup/") {
             score -= 80;
         }
+        if path_lower.contains("/.gradle/caches/") {
+            score -= 80;
+        }
+        if path_lower.contains("/.m2/repository/") {
+            score -= 80;
+        }
+        if path_lower.contains("/.nuget/packages/") {
+            score -= 80;
+        }
+        if path_lower.contains("/site-packages/") {
+            score -= 70;
+        }
+        if path_lower.contains("/.venv/") || path_lower.contains("/venv/") {
+            score -= 70;
+        }
+        if path_lower.contains("/__pycache__/") {
+            score -= 70;
+        }
 
         // OS/application caches.
         if path_lower.contains("/library/caches/") || path_lower.contains("/.cache/") {
+            score -= 80;
+        }
+        // Xcode build cache can be extremely noisy.
+        if path_lower.contains("/library/developer/xcode/deriveddata/") {
             score -= 80;
         }
 
