@@ -1,10 +1,25 @@
 # Improve Search Ranking Plan
 
 **Created:** 2025-12-19  
-**Status:** Proposed  
+**Status:** In progress  
 **Goal:** Make global filename search reliably surface “your” files (project/workspace) above dependency caches and generated artifacts, especially for ambiguous queries like `server.go`.
 
 This plan focuses on ranking (ordering) rather than exclusion (removing files from the index). It should still be possible to find files inside caches (e.g., Go module cache) when that’s what the user wants.
+
+---
+
+## 0. Progress (as of 2025-12-19)
+
+Completed (implemented + tested):
+- **Contextual tie-break ranking (Phase 1)**: demote common cache/build/tool-state paths as a secondary key (after match score), then sort by `mtime`, `path_depth`, and deterministic `path`.
+- **Measurement suite**: deterministic corpus + query suite + metrics dashboard + regression gates in `crates/vicaya-index/tests/`, plus an end-to-end CLI JSON smoke test in `crates/vicaya-cli/tests/`.
+- **Diagnostics**: daemon build info is exposed via IPC `Status`; the TUI footer shows the daemon SHA only when it mismatches the TUI build.
+- **Scope-aware boost (Phase 3, initial)**: IPC `Search` supports optional `scope`; CLI sends `cwd` by default; ranking boosts results under the scope (while preserving cache demotions).
+
+Next up (planned):
+- Make the demote/boost patterns configurable via `Config`.
+- Add an `--explain-rank` mode to print per-result rank features.
+- Consider diversification for high-tie cases and lightweight local personalization.
 
 ---
 
@@ -458,4 +473,3 @@ Practical constraints:
 2. Add **Option A** (path rarity priors) as a low-risk, high-return tie-breaker.  
 3. If you want “Spotlight but better”, add **Option C** (local personalization) with a simple, transparent boost first, then graduate to LTR if needed.  
 4. Keep **Option D** as a future “power mode” once evaluation infrastructure is solid; don’t lead with it.
-
