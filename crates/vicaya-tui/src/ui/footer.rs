@@ -117,18 +117,24 @@ fn compact_build_info(app: &AppState) -> String {
 
     if let Some(status) = &app.daemon_status {
         let daemon_sha = status.build.git_sha.as_str();
-        if !daemon_sha.is_empty() && daemon_sha != "unknown" {
+        let daemon_sha_known = !daemon_sha.is_empty() && daemon_sha != "unknown";
+        let client_sha_known = sha != "unknown";
+        let mismatch = daemon_sha_known && client_sha_known && daemon_sha != sha;
+
+        // Keep the footer compact: show daemon build info only when it differs
+        // from the TUI build (or when we can't compare because client sha is
+        // unknown).
+        if mismatch || (daemon_sha_known && !client_sha_known) {
             out.push(' ');
             out.push('d');
             out.push('@');
             for (idx, ch) in daemon_sha.chars().enumerate() {
-                if idx >= 7 {
+                if idx >= 4 {
                     break;
                 }
                 out.push(ch);
             }
-
-            if sha != "unknown" && daemon_sha != sha {
+            if mismatch {
                 out.push('!');
             }
         }
