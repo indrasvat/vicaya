@@ -31,6 +31,9 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# Time / date parsing (niyama:mtime)
+chrono.workspace = true
+
 # Vicaya crates
 vicaya-core = { path = "../vicaya-core" }
 vicaya-index = { path = "../vicaya-index" }

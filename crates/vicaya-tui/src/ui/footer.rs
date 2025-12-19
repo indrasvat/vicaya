@@ -18,8 +18,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         Span::styled(" focus  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+T:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" drishti  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled("Ctrl+P:", Style::default().fg(ui::PRIMARY)),
+        Span::styled(" kriya-suchi  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+O:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" purvadarshana  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled("Ctrl+G:", Style::default().fg(ui::PRIMARY)),
+        Span::styled(" varga  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("?:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" help  ", Style::default().fg(ui::TEXT_SECONDARY)),
     ];
@@ -27,13 +31,26 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     if app.search.is_results_focused() {
         spans.extend(vec![
             Span::styled("↵:", Style::default().fg(ui::PRIMARY)),
-            Span::styled(" open  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled(" open/enter  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("h/l:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" ksetra  ", Style::default().fg(ui::TEXT_SECONDARY)),
             Span::styled("y:", Style::default().fg(ui::PRIMARY)),
             Span::styled(" copy  ", Style::default().fg(ui::TEXT_SECONDARY)),
             Span::styled("p:", Style::default().fg(ui::PRIMARY)),
             Span::styled(" print  ", Style::default().fg(ui::TEXT_SECONDARY)),
             Span::styled("r:", Style::default().fg(ui::PRIMARY)),
             Span::styled(" reveal  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        ]);
+    }
+
+    if app.search.is_preview_focused() || app.mode == crate::state::AppMode::PreviewSearch {
+        spans.extend(vec![
+            Span::styled("/:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" find  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("n/N:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" next/prev  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("Ctrl+N:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" lines  ", Style::default().fg(ui::TEXT_SECONDARY)),
         ]);
     }
 
