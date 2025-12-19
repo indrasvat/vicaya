@@ -213,9 +213,9 @@ vicaya must feel like a native macOS utility: instant, minimal, keyboard-first b
 ```text
 $ vicaya search "main.rs" --limit 5 --sort=rank
 RANK  SCORE  MODIFIED            PATH
-1     0.98   2025-11-20 10:21    /Users/robin/projects/vicaya/src/main.rs
-2     0.91   2025-10-02 19:05    /Users/robin/projects/app/src/main.rs
-3     0.76   2024-07-11 08:09    /Users/robin/archive/rust-demo/src/main.rs
+1     0.98   2025-11-20 10:21    /Users/alice/projects/vicaya/src/main.rs
+2     0.91   2025-10-02 19:05    /Users/alice/projects/app/src/main.rs
+3     0.76   2024-07-11 08:09    /Users/alice/archive/rust-demo/src/main.rs
 ```
 
 ### State Transitions (High-Level)

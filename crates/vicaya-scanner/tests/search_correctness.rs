@@ -39,6 +39,7 @@ fn search_files(root: &Path, query_str: &str) -> Vec<String> {
     let query = Query {
         term: query_str.to_string(),
         limit: 100,
+        scope: None,
     };
 
     let results = engine.search(&query);
