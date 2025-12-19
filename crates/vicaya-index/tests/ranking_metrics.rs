@@ -109,8 +109,8 @@ fn ranking_report_current_baseline() {
 
     if should_print_report() {
         println!(
-            "\n{: <12} {: >8} {: >8} {: >6} {: >6}  {}",
-            "query", "base", "curr", "Δ", "noise", "top1 (base → curr)"
+            "\n{: <12} {: >8} {: >8} {: >6} {: >6}  top1 (base → curr)",
+            "query", "base", "curr", "Δ", "noise"
         );
         println!("{}", "─".repeat(80));
     }
