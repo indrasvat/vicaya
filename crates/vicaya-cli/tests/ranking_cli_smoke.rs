@@ -139,7 +139,11 @@ fn cli_search_returns_json_results() {
 
     let paths: Vec<String> = results
         .into_iter()
-        .filter_map(|v| v.get("path").and_then(|p| p.as_str()).map(|s| s.to_string()))
+        .filter_map(|v| {
+            v.get("path")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
 
     assert!(
@@ -154,7 +158,9 @@ fn cli_search_returns_json_results() {
     );
 
     assert!(
-        paths.iter().any(|p| p == project_server.to_string_lossy().as_ref()),
+        paths
+            .iter()
+            .any(|p| p == project_server.to_string_lossy().as_ref()),
         "expected project server.go in results. got={paths:?}"
     );
 }

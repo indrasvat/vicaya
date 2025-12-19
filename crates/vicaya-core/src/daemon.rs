@@ -204,8 +204,8 @@ fn is_socket_connectable() -> bool {
 fn wait_for_daemon_ready(pid: i32) -> crate::Result<()> {
     #[cfg(unix)]
     {
-        use std::time::{Duration, Instant};
         use std::os::unix::net::UnixStream;
+        use std::time::{Duration, Instant};
 
         // Startup can be dominated by loading a large on-disk index snapshot, so
         // allow a generous timeout before declaring failure.

@@ -5,8 +5,8 @@
 
 #![allow(dead_code)]
 
-use vicaya_index::{FileMeta, FileTable, Query, QueryEngine, SearchResult, StringArena};
 use vicaya_index::TrigramIndex;
+use vicaya_index::{FileMeta, FileTable, Query, QueryEngine, SearchResult, StringArena};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TestFile {
@@ -19,6 +19,7 @@ pub struct TestFile {
 #[derive(Debug, Clone, Copy)]
 pub struct QueryCase {
     pub query: &'static str,
+    pub scope: Option<&'static str>,
     pub relevant_paths: &'static [&'static str],
 }
 
@@ -192,6 +193,20 @@ pub fn corpus_files() -> Vec<TestFile> {
             mtime: 1_770_000_200,
             size: 1_024,
         },
+        // Scope-boost demo: two equally-good matches in different repos. The
+        // out-of-scope file is newer, so without a scope-aware boost it wins.
+        TestFile {
+            path: "/Users/alice/Projects/other-app/settings.json",
+            name: "settings.json",
+            mtime: 1_780_000_000,
+            size: 1_000,
+        },
+        TestFile {
+            path: "/Users/alice/GolandProjects/spartan-ranker/settings.json",
+            name: "settings.json",
+            mtime: 1_760_000_000,
+            size: 1_000,
+        },
         // Another project to avoid “single-bucket” corpus.
         TestFile {
             path: "/Users/alice/Projects/recipes/notes.txt",
@@ -206,38 +221,54 @@ pub fn query_suite() -> Vec<QueryCase> {
     vec![
         QueryCase {
             query: "server.go",
+            scope: None,
             relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/server.go"],
         },
         QueryCase {
             query: "search.go",
-            relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go"],
+            scope: None,
+            relevant_paths: &[
+                "/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go",
+            ],
         },
         QueryCase {
             query: "Info.plist",
+            scope: None,
             relevant_paths: &["/Users/alice/Projects/ios-app/Info.plist"],
         },
         QueryCase {
             query: "pom.xml",
+            scope: None,
             relevant_paths: &["/Users/alice/Projects/java-app/pom.xml"],
         },
         QueryCase {
             query: "sessions.py",
+            scope: None,
             relevant_paths: &["/Users/alice/Projects/pyapp/sessions.py"],
         },
         QueryCase {
+            query: "settings.json",
+            scope: Some("/Users/alice/GolandProjects/spartan-ranker"),
+            relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/settings.json"],
+        },
+        QueryCase {
             query: "invoice",
+            scope: None,
             relevant_paths: &["/Users/alice/Documents/invoice_2024.pdf"],
         },
         QueryCase {
             query: "Screenshot",
+            scope: None,
             relevant_paths: &["/Users/alice/Downloads/Screenshot_2025-12-18_19-40-47.png"],
         },
         QueryCase {
             query: "IMG_0001",
+            scope: None,
             relevant_paths: &["/Users/alice/Pictures/IMG_0001.JPG"],
         },
         QueryCase {
             query: "notes",
+            scope: None,
             relevant_paths: &[
                 "/Users/alice/Desktop/meeting-notes.txt",
                 "/Users/alice/Projects/recipes/notes.txt",
@@ -251,11 +282,13 @@ pub fn run_query(
     arena: &StringArena,
     trigram_index: &TrigramIndex,
     query: &str,
+    scope: Option<&str>,
     limit: usize,
 ) -> Vec<SearchResult> {
     let engine = QueryEngine::new(file_table, arena, trigram_index);
     engine.search(&Query {
         term: query.to_string(),
         limit,
+        scope: scope.map(std::path::PathBuf::from),
     })
 }

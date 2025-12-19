@@ -580,7 +580,11 @@ impl IpcServer {
     /// Handle a request and generate a response.
     fn handle_request(&self, request: Request) -> Response {
         match request {
-            Request::Search { query, limit } => {
+            Request::Search {
+                query,
+                limit,
+                scope,
+            } => {
                 let state = self.state.read().unwrap();
                 let engine = QueryEngine::new(
                     &state.snapshot.file_table,
@@ -588,7 +592,13 @@ impl IpcServer {
                     &state.snapshot.trigram_index,
                 );
 
-                let query_obj = Query { term: query, limit };
+                let query_obj = Query {
+                    term: query,
+                    limit,
+                    scope: scope
+                        .filter(|s| !s.trim().is_empty())
+                        .map(std::path::PathBuf::from),
+                };
                 let results = engine.search(&query_obj);
                 let ipc_results = results
                     .into_iter()

@@ -55,10 +55,7 @@ fn bucket_id(path: &str) -> String {
     comps.first().copied().unwrap_or("unknown").to_string()
 }
 
-fn noise_before_first_relevant(
-    results: &[vicaya_index::SearchResult],
-    relevant: &[&str],
-) -> usize {
+fn noise_before_first_relevant(results: &[vicaya_index::SearchResult], relevant: &[&str]) -> usize {
     let Some(rank) = first_relevant_rank(results, relevant) else {
         return 0;
     };
@@ -119,7 +116,8 @@ fn ranking_report_current_baseline() {
     }
 
     for case in &suite {
-        let current_results = support::run_query(&table, &arena, &trigram_index, case.query, 100);
+        let current_results =
+            support::run_query(&table, &arena, &trigram_index, case.query, case.scope, 100);
         let mut baseline_results = current_results.clone();
 
         // Baseline: score-only, stable by insertion order (file_id).
@@ -147,8 +145,14 @@ fn ranking_report_current_baseline() {
                 (Some(b), Some(c)) => (b as i64 - c as i64).to_string(),
                 _ => "n/a".to_string(),
             };
-            let base_top = baseline_results.first().map(|r| r.path.as_str()).unwrap_or("");
-            let curr_top = current_results.first().map(|r| r.path.as_str()).unwrap_or("");
+            let base_top = baseline_results
+                .first()
+                .map(|r| r.path.as_str())
+                .unwrap_or("");
+            let curr_top = current_results
+                .first()
+                .map(|r| r.path.as_str())
+                .unwrap_or("");
             println!(
                 "{: <12} {: >8?} {: >8?} {: >6} {: >6}  {} → {}",
                 case.query,
@@ -185,7 +189,8 @@ fn ranking_report_current_baseline() {
         let mut base_div = Vec::new();
         let mut curr_div = Vec::new();
         for case in &suite {
-            let results = support::run_query(&table, &arena, &trigram_index, case.query, 100);
+            let results =
+                support::run_query(&table, &arena, &trigram_index, case.query, case.scope, 100);
             let mut baseline_results = results.clone();
 
             baseline_results.sort_by(|a, b| {
@@ -214,20 +219,25 @@ fn ranking_report_current_baseline() {
 
         println!("\n{: <18} {: >10} {: >10}", "metric", "baseline", "current");
         println!("{}", "─".repeat(44));
-        println!("{: <18} {: >10.3} {: >10.3}", "MRR@10", baseline_mrr10, current_mrr10);
-        println!("{: <18} {: >10.3} {: >10.3}", "Hit@1", baseline_hit1, current_hit1);
-        println!("{: <18} {: >10.3} {: >10.3}", "Hit@3", baseline_hit3, current_hit3);
         println!(
             "{: <18} {: >10.3} {: >10.3}",
-            "NoiseBeforeRel",
-            baseline_noise_avg,
-            current_noise_avg
+            "MRR@10", baseline_mrr10, current_mrr10
         );
         println!(
             "{: <18} {: >10.3} {: >10.3}",
-            "Diversity@10",
-            base_div_avg,
-            curr_div_avg
+            "Hit@1", baseline_hit1, current_hit1
+        );
+        println!(
+            "{: <18} {: >10.3} {: >10.3}",
+            "Hit@3", baseline_hit3, current_hit3
+        );
+        println!(
+            "{: <18} {: >10.3} {: >10.3}",
+            "NoiseBeforeRel", baseline_noise_avg, current_noise_avg
+        );
+        println!(
+            "{: <18} {: >10.3} {: >10.3}",
+            "Diversity@10", base_div_avg, curr_div_avg
         );
     }
 

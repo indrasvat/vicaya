@@ -90,6 +90,7 @@ fn it_handles_large_search_responses_without_truncation() {
         &Request::Search {
             query: "LargeResponseTest".to_string(),
             limit: 500,
+            scope: None,
         },
     );
 

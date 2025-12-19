@@ -152,7 +152,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     error: None,
                 });
             } else {
-                let mut results = match client.search(&trimmed, limit) {
+                let scope = scope.as_deref();
+                let mut results = match client.search(&trimmed, limit, scope) {
                     Ok(r) => r,
                     Err(e) => {
                         client.reconnect();
@@ -166,7 +167,6 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                 };
 
                 // Scope + Niyama filtering (best-effort).
-                let scope = scope.as_deref();
                 results.retain(|r| matches_filters(r, view, scope, &niyamas));
 
                 let _ = evt_tx.send(WorkerEvent::SearchResults {

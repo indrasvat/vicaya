@@ -13,7 +13,8 @@ fn corpus_smoke_searches_return_expected_hits() {
     let (table, arena, trigram_index) = support::build_snapshot(&files);
 
     for case in suite {
-        let results = support::run_query(&table, &arena, &trigram_index, case.query, 100);
+        let results =
+            support::run_query(&table, &arena, &trigram_index, case.query, case.scope, 100);
         for expected in case.relevant_paths {
             assert!(
                 results.iter().any(|r| r.path == *expected),

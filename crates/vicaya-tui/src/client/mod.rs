@@ -34,7 +34,12 @@ impl IpcClient {
     }
 
     /// Search for files.
-    pub fn search(&mut self, query: &str, limit: usize) -> anyhow::Result<Vec<SearchResult>> {
+    pub fn search(
+        &mut self,
+        query: &str,
+        limit: usize,
+        scope: Option<&std::path::Path>,
+    ) -> anyhow::Result<Vec<SearchResult>> {
         if query.is_empty() {
             return Ok(Vec::new());
         }
@@ -42,6 +47,7 @@ impl IpcClient {
         let req = Request::Search {
             query: query.to_string(),
             limit,
+            scope: scope.map(|p| p.to_string_lossy().to_string()),
         };
 
         match self.request(&req)? {

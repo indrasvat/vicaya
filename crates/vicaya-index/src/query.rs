@@ -11,6 +11,8 @@ pub struct Query {
     pub term: String,
     /// Maximum number of results.
     pub limit: usize,
+    /// Optional scope root to boost (directory path).
+    pub scope: Option<std::path::PathBuf>,
 }
 
 /// A search result.
@@ -58,10 +60,12 @@ impl<'a> QueryEngine<'a> {
     /// Execute a search query.
     pub fn search(&self, query: &Query) -> Vec<SearchResult> {
         let normalized = query.term.to_lowercase();
+        let scope = query.scope.as_deref();
+        let scope_depth = scope.map(|s| s.components().count());
 
         // For short queries, do a linear scan
         if normalized.len() < 3 {
-            return self.linear_search(&normalized, query.limit);
+            return self.linear_search(&normalized, scope, scope_depth, query.limit);
         }
 
         // Extract trigrams and query the index
@@ -71,7 +75,7 @@ impl<'a> QueryEngine<'a> {
         // Score and filter candidates
         let mut ranked: Vec<(SearchResult, RankFeatures)> = candidates
             .iter()
-            .filter_map(|&file_id| self.score_candidate(file_id, &normalized))
+            .filter_map(|&file_id| self.score_candidate(file_id, &normalized, scope, scope_depth))
             .collect();
 
         self.sort_ranked_results(&mut ranked);
@@ -82,7 +86,13 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// Score a candidate file.
-    fn score_candidate(&self, file_id: FileId, query: &str) -> Option<(SearchResult, RankFeatures)> {
+    fn score_candidate(
+        &self,
+        file_id: FileId,
+        query: &str,
+        scope: Option<&std::path::Path>,
+        scope_depth: Option<usize>,
+    ) -> Option<(SearchResult, RankFeatures)> {
         let meta = self.file_table.get(file_id)?;
 
         let path = self.string_arena.get(meta.path_offset, meta.path_len)?;
@@ -115,19 +125,21 @@ impl<'a> QueryEngine<'a> {
             (None, None) => return None,
         };
 
+        let path_depth = Self::path_depth(path);
         let features = RankFeatures {
-            context_score: Self::context_score(&path_lower),
-            path_depth: Self::path_depth(path),
+            context_score: Self::context_score(&path_lower)
+                + Self::scope_boost(path, path_depth, scope, scope_depth),
+            path_depth,
         };
 
         Some((
             SearchResult {
-            path: path.to_string(),
-            name: name.to_string(),
-            score,
-            size: meta.size,
-            mtime: meta.mtime,
-        },
+                path: path.to_string(),
+                name: name.to_string(),
+                score,
+                size: meta.size,
+                mtime: meta.mtime,
+            },
             features,
         ))
     }
@@ -162,7 +174,13 @@ impl<'a> QueryEngine<'a> {
     }
 
     /// Linear search for short queries.
-    fn linear_search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+    fn linear_search(
+        &self,
+        query: &str,
+        scope: Option<&std::path::Path>,
+        scope_depth: Option<usize>,
+        limit: usize,
+    ) -> Vec<SearchResult> {
         let mut ranked: Vec<(SearchResult, RankFeatures)> = Vec::new();
         // Early termination: if we scan 1000 files without finding any matches,
         // assume the query won't match anything and stop (prevents hang on special chars)
@@ -178,7 +196,7 @@ impl<'a> QueryEngine<'a> {
                 break;
             }
 
-            if let Some(result) = self.score_candidate(file_id, query) {
+            if let Some(result) = self.score_candidate(file_id, query, scope, scope_depth) {
                 ranked.push(result);
             }
         }
@@ -271,6 +289,31 @@ impl<'a> QueryEngine<'a> {
 
         score
     }
+
+    fn scope_boost(
+        path: &str,
+        path_depth: usize,
+        scope: Option<&std::path::Path>,
+        scope_depth: Option<usize>,
+    ) -> i32 {
+        let (Some(scope), Some(scope_depth)) = (scope, scope_depth) else {
+            return 0;
+        };
+
+        let path = std::path::Path::new(path);
+        if !path.starts_with(scope) {
+            return 0;
+        }
+
+        // Scope boost should materially improve “search from within a repo”
+        // without breaking cache demotions: it’s additive on top of the
+        // existing context penalties.
+        //
+        // Prefer closer (shallower) matches within the scope.
+        let rel_depth = path_depth.saturating_sub(scope_depth);
+        let depth_penalty = (rel_depth as i32).min(20);
+        (120 - depth_penalty).max(0)
+    }
 }
 
 #[cfg(test)]
@@ -306,6 +349,7 @@ mod tests {
         let query = Query {
             term: "test".to_string(),
             limit: 10,
+            scope: None,
         };
 
         let results = engine.search(&query);
@@ -348,6 +392,7 @@ mod tests {
         let query = Query {
             term: "*".to_string(),
             limit: 100,
+            scope: None,
         };
 
         let start = std::time::Instant::now();
@@ -402,6 +447,7 @@ mod tests {
         let query = Query {
             term: "5".to_string(),
             limit: 50,
+            scope: None,
         };
 
         let results = engine.search(&query);

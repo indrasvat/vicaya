@@ -31,7 +31,13 @@ impl Default for BuildInfo {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Request {
     /// Search for files.
-    Search { query: String, limit: usize },
+    Search {
+        query: String,
+        limit: usize,
+        /// Optional scope root (directory path) used to boost results “near” the user’s context.
+        #[serde(default)]
+        scope: Option<String>,
+    },
     /// Get daemon status.
     Status,
     /// Trigger index rebuild.
@@ -119,11 +125,12 @@ mod tests {
         let search = Request::Search {
             query: "test".to_string(),
             limit: 10,
+            scope: None,
         };
         let json = search.to_json().unwrap();
         let decoded: Request = Request::from_json(&json).unwrap();
         assert!(
-            matches!(decoded, Request::Search { query, limit } if query == "test" && limit == 10)
+            matches!(decoded, Request::Search { query, limit, scope } if query == "test" && limit == 10 && scope.is_none())
         );
 
         // Test Status request
