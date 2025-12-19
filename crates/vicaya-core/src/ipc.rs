@@ -2,6 +2,30 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Build metadata for a running daemon or client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildInfo {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub git_sha: String,
+    #[serde(default)]
+    pub timestamp: String,
+    #[serde(default)]
+    pub target: String,
+}
+
+impl Default for BuildInfo {
+    fn default() -> Self {
+        Self {
+            version: String::new(),
+            git_sha: String::new(),
+            timestamp: String::new(),
+            target: String::new(),
+        }
+    }
+}
+
 /// IPC request from client to daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -27,6 +51,9 @@ pub enum Response {
         /// Daemon process ID.
         #[serde(default)]
         pid: i32,
+        /// Daemon build metadata (useful to detect client/daemon mismatches).
+        #[serde(default)]
+        build: BuildInfo,
         indexed_files: usize,
         trigram_count: usize,
         arena_size: usize,
@@ -137,6 +164,7 @@ mod tests {
         // Test Status response
         let status = Response::Status {
             pid: 123,
+            build: BuildInfo::default(),
             indexed_files: 100,
             trigram_count: 500,
             arena_size: 2048,

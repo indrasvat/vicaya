@@ -290,6 +290,7 @@ fn status(format: &str) -> Result<()> {
     match response {
         Response::Status {
             pid,
+            build,
             indexed_files,
             trigram_count,
             arena_size,
@@ -302,6 +303,12 @@ fn status(format: &str) -> Result<()> {
                     "daemon": {
                         "running": true,
                         "pid": pid,
+                        "build": {
+                            "version": build.version,
+                            "git_sha": build.git_sha,
+                            "timestamp": build.timestamp,
+                            "target": build.target,
+                        }
                     },
                     "index": {
                         "files": indexed_files,
@@ -612,6 +619,7 @@ fn daemon_command(action: DaemonAction) -> Result<()> {
                         arena_size,
                         last_updated,
                         reconciling,
+                        ..
                     }) = client.request(&request)
                     {
                         println!("\nIndex Status:");

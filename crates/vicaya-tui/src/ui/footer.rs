@@ -75,7 +75,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         ));
     }
 
-    let build_info = format!(" {}", compact_build_info());
+    let build_info = format!(" {}", compact_build_info(app));
     let build_width = (UnicodeWidthStr::width(build_info.as_str()) as u16).min(area.width);
 
     let chunks = Layout::default()
@@ -97,7 +97,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     f.render_widget(build, chunks[1]);
 }
 
-fn compact_build_info() -> String {
+fn compact_build_info(app: &AppState) -> String {
     let version = BUILD_INFO.version;
     let sha = BUILD_INFO.git_sha;
 
@@ -112,6 +112,25 @@ fn compact_build_info() -> String {
                 break;
             }
             out.push(ch);
+        }
+    }
+
+    if let Some(status) = &app.daemon_status {
+        let daemon_sha = status.build.git_sha.as_str();
+        if !daemon_sha.is_empty() && daemon_sha != "unknown" {
+            out.push(' ');
+            out.push('d');
+            out.push('@');
+            for (idx, ch) in daemon_sha.chars().enumerate() {
+                if idx >= 7 {
+                    break;
+                }
+                out.push(ch);
+            }
+
+            if sha != "unknown" && daemon_sha != sha {
+                out.push('!');
+            }
         }
     }
 

@@ -70,12 +70,14 @@ impl IpcClient {
         match self.request(&req)? {
             Response::Status {
                 pid: _,
+                build,
                 indexed_files,
                 trigram_count,
                 arena_size,
                 last_updated,
                 reconciling,
             } => Ok(DaemonStatus {
+                build,
                 indexed_files,
                 trigram_count,
                 arena_size,
@@ -152,6 +154,7 @@ impl Default for IpcClient {
 /// Daemon status information.
 #[derive(Debug, Clone)]
 pub struct DaemonStatus {
+    pub build: vicaya_core::ipc::BuildInfo,
     pub indexed_files: usize,
     pub trigram_count: usize,
     pub arena_size: usize,

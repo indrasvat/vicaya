@@ -609,6 +609,12 @@ impl IpcServer {
                 let state = self.state.read().unwrap();
                 Response::Status {
                     pid: std::process::id() as i32,
+                    build: vicaya_core::ipc::BuildInfo {
+                        version: vicaya_core::build_info::BUILD_INFO.version.to_string(),
+                        git_sha: vicaya_core::build_info::BUILD_INFO.git_sha.to_string(),
+                        timestamp: vicaya_core::build_info::BUILD_INFO.timestamp.to_string(),
+                        target: vicaya_core::build_info::BUILD_INFO.target.to_string(),
+                    },
                     indexed_files: state.path_to_id.len(),
                     trigram_count: state.snapshot.trigram_index.trigram_count(),
                     arena_size: state.snapshot.string_arena.size(),
