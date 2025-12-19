@@ -16,7 +16,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         app.view.label(),
         app.view.english_hint()
     );
-    let ksetra = "ksetra: global";
+    let ksetra = format!("ksetra: {}", app.ksetra.breadcrumbs());
 
     let (rakshaka_text, rakshaka_color, suchi_text, reconciling) =
         if let Some(status) = &app.daemon_status {

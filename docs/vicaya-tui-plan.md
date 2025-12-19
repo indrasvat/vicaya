@@ -1,7 +1,8 @@
 # vicaya-tui vNext Plan (Drishti / Ksetra UX)
 
 **Created:** 2025-12-18  
-**Status:** Plan + implementation tracking (Phase 1–2 shipped; Phase 3 next)  
+**Last updated:** 2025-12-19  
+**Status:** Plan + implementation tracking (Phase 1–3 shipped; Phase 4 next)  
 **Goal:** Make `vicaya-tui` meaningfully more useful than a results list by adding preview, modes (“views”), scope navigation, richer actions, and uniquely vicaya features—while preserving vicaya’s “instant, index-first” feel.
 
 > Note: This document proposes **UI/UX concepts and terminology** only. It intentionally does **not** rename or refactor code artifacts (modules/types/etc). Any future implementation should keep internal names stable and update only user-facing strings and behavior.
@@ -103,7 +104,7 @@ Three regions that stay consistent across `Drishtis`:
 │    README.md     …/           │  2 …                                                      │
 │    …                           │  … (scroll; search-in-preview; highlight)                 │
 ├───────────────────────────────┴───────────────────────────────────────────────────────────┤
-│ Tab focus | Ctrl+T Drishti | Ctrl+P Kriya-Suchi | Ctrl+O Purvadarshana | / Niyama | ? help │
+│ Tab focus | Ctrl+T Drishti | Ctrl+P Kriya-Suchi | Ctrl+O Preview | Ctrl+G Varga | / Search | ? help │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -336,7 +337,7 @@ Most UX can be implemented in the TUI without daemon changes, but a few daemon u
 
 ## 12. Implementation Roadmap (Phased)
 
-### Current Implementation Status (As Of 2025-12-18)
+### Current Implementation Status (As Of 2025-12-19)
 
 Shipped (Phase 1–2, initial):
 
@@ -353,18 +354,20 @@ Shipped (Phase 1–2, initial):
 `Drishtis` shipped:
 
 - [x] `Patra` (Files)
-- [x] `Sthana` (Directories) — currently filter-only (next: `Pravesha` / scope push)
+- [x] `Sthana` (Directories) — `Pravesha` pushes `Ksetra` scope
 
-Follow-ups still pending (within Phase 1–2 scope):
+Shipped (Phase 3):
 
-- [ ] Make the `Drishti` switcher searchable (type-to-filter)
-- [ ] Optional: line numbers + search-within-preview
+- [x] Make the `Drishti` switcher searchable (type-to-filter)
+- [x] Preview: search-within-preview + optional line numbers
+- [x] Add `Kriya-Suchi` (action palette, `Ctrl+P`)
+- [x] Implement `Ksetra` stack with breadcrumbs + `Pravesha`/`Nirgama`
+- [x] Add `Niyama` chips (`type`, `ext`, `path`, minimal `mtime/size`)
+- [x] Add `Varga` grouping toggle (none / dir / ext) without losing ranking
 
-Next up (Phase 3):
+Next up (Phase 4):
 
-- [ ] Implement `Ksetra` stack with breadcrumbs + `Pravesha`/`Nirgama`
-- [ ] Add `Niyama` chips (`type`, `ext`, `path`, minimal `mtime/size`)
-- [ ] Add `Varga` grouping toggle (dir / ext) without losing ranking
+- [ ] Implement `Antarvicaya` (Grep) `Drishti` (scoped `rg` streaming results)
 
 ### Phase 0 — Spec Lock (1–3 days)
 
