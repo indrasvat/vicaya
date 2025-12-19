@@ -580,7 +580,11 @@ impl IpcServer {
     /// Handle a request and generate a response.
     fn handle_request(&self, request: Request) -> Response {
         match request {
-            Request::Search { query, limit } => {
+            Request::Search {
+                query,
+                limit,
+                scope,
+            } => {
                 let state = self.state.read().unwrap();
                 let engine = QueryEngine::new(
                     &state.snapshot.file_table,
@@ -588,7 +592,13 @@ impl IpcServer {
                     &state.snapshot.trigram_index,
                 );
 
-                let query_obj = Query { term: query, limit };
+                let query_obj = Query {
+                    term: query,
+                    limit,
+                    scope: scope
+                        .filter(|s| !s.trim().is_empty())
+                        .map(std::path::PathBuf::from),
+                };
                 let results = engine.search(&query_obj);
                 let ipc_results = results
                     .into_iter()
@@ -609,6 +619,12 @@ impl IpcServer {
                 let state = self.state.read().unwrap();
                 Response::Status {
                     pid: std::process::id() as i32,
+                    build: vicaya_core::ipc::BuildInfo {
+                        version: vicaya_core::build_info::BUILD_INFO.version.to_string(),
+                        git_sha: vicaya_core::build_info::BUILD_INFO.git_sha.to_string(),
+                        timestamp: vicaya_core::build_info::BUILD_INFO.timestamp.to_string(),
+                        target: vicaya_core::build_info::BUILD_INFO.target.to_string(),
+                    },
                     indexed_files: state.path_to_id.len(),
                     trigram_count: state.snapshot.trigram_index.trigram_count(),
                     arena_size: state.snapshot.string_arena.size(),

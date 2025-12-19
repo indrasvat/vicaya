@@ -125,9 +125,17 @@ fn main() -> Result<()> {
 fn search(query: &str, limit: usize, format: &str) -> Result<()> {
     // Auto-start daemon if not running
     if !vicaya_core::daemon::is_running() {
-        println!("Daemon is not running. Starting daemon...");
+        if format == "json" {
+            eprintln!("Daemon is not running. Starting daemon...");
+        } else {
+            println!("Daemon is not running. Starting daemon...");
+        }
         let pid = vicaya_core::daemon::start_daemon()?;
-        println!("✓ Daemon started (PID: {})", pid);
+        if format == "json" {
+            eprintln!("✓ Daemon started (PID: {})", pid);
+        } else {
+            println!("✓ Daemon started (PID: {})", pid);
+        }
 
         // Wait a moment for daemon to initialize
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -136,6 +144,9 @@ fn search(query: &str, limit: usize, format: &str) -> Result<()> {
     let request = Request::Search {
         query: query.to_string(),
         limit,
+        scope: std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string()),
     };
 
     let response = IpcClient::connect()?.request(&request)?;
@@ -282,6 +293,7 @@ fn status(format: &str) -> Result<()> {
     match response {
         Response::Status {
             pid,
+            build,
             indexed_files,
             trigram_count,
             arena_size,
@@ -294,6 +306,12 @@ fn status(format: &str) -> Result<()> {
                     "daemon": {
                         "running": true,
                         "pid": pid,
+                        "build": {
+                            "version": build.version,
+                            "git_sha": build.git_sha,
+                            "timestamp": build.timestamp,
+                            "target": build.target,
+                        }
                     },
                     "index": {
                         "files": indexed_files,
@@ -604,6 +622,7 @@ fn daemon_command(action: DaemonAction) -> Result<()> {
                         arena_size,
                         last_updated,
                         reconciling,
+                        ..
                     }) = client.request(&request)
                     {
                         println!("\nIndex Status:");

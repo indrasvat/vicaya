@@ -34,7 +34,12 @@ impl IpcClient {
     }
 
     /// Search for files.
-    pub fn search(&mut self, query: &str, limit: usize) -> anyhow::Result<Vec<SearchResult>> {
+    pub fn search(
+        &mut self,
+        query: &str,
+        limit: usize,
+        scope: Option<&std::path::Path>,
+    ) -> anyhow::Result<Vec<SearchResult>> {
         if query.is_empty() {
             return Ok(Vec::new());
         }
@@ -42,6 +47,7 @@ impl IpcClient {
         let req = Request::Search {
             query: query.to_string(),
             limit,
+            scope: scope.map(|p| p.to_string_lossy().to_string()),
         };
 
         match self.request(&req)? {
@@ -70,12 +76,14 @@ impl IpcClient {
         match self.request(&req)? {
             Response::Status {
                 pid: _,
+                build,
                 indexed_files,
                 trigram_count,
                 arena_size,
                 last_updated,
                 reconciling,
             } => Ok(DaemonStatus {
+                build,
                 indexed_files,
                 trigram_count,
                 arena_size,
@@ -152,6 +160,7 @@ impl Default for IpcClient {
 /// Daemon status information.
 #[derive(Debug, Clone)]
 pub struct DaemonStatus {
+    pub build: vicaya_core::ipc::BuildInfo,
     pub indexed_files: usize,
     pub trigram_count: usize,
     pub arena_size: usize,
