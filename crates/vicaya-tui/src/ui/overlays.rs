@@ -44,6 +44,7 @@ pub fn render_help(f: &mut Frame) {
         "  /             Search in preview",
         "  n / N         Next / previous match",
         "  Ctrl+N        Toggle line numbers",
+        "  Ctrl+L        Clear preview search",
         "",
         "Actions (phala):",
         "  Enter / o     Open (files) / Enter scope (dirs)",

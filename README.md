@@ -112,10 +112,13 @@ The TUI connects to the same daemon and gives you instant, fuzzy-as-you-type res
 Highlights:
 
 - Split view: `phala` (results) + `purvadarshana` (preview with syntax highlighting)
-- `Ctrl+T` opens the `drishti` switcher (Patra = Files, Sthana = Directories)
+- `Ctrl+T` opens the searchable `drishti` switcher (Patra = Files, Sthana = Directories)
+- `Enter` on a directory pushes `ksetra` scope; `h` pops scope (breadcrumbs in header)
+- `Niyama` filters in `prashna`: `type:file|dir`, `ext:rs,md`, `path:src/`, `mtime:<7d`, `size:>10mb`
+- `Ctrl+G` cycles `varga` grouping (none/dir/ext); `Ctrl+P` opens `kriya-suchi` (action palette)
 - `Ctrl+O` toggles `purvadarshana`; `Tab` / `Shift+Tab` cycles focus (input/results/preview)
-- Preview scrolling: `j/k`, arrows, `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `g/G`
-- Actions (in `phala`): `Enter/o` open in `$EDITOR`, `y` copy path, `p` print path and exit, `r` reveal in file manager
+- Preview: scroll with `j/k`, arrows, `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `g/G`; search with `/`, jump `n/N`, toggle line numbers `Ctrl+N`, clear `Ctrl+L`
+- Actions (in `phala`): `Enter/o` open in `$EDITOR` (or enter scope on dirs), `y` copy path, `p` print path and exit, `r` reveal in file manager
 - Press `?` for in-app help (when not focused on `prashna`)
 
 Terminology note: the UI uses romanized Sanskrit labels (e.g. `drishti`, `ksetra`, `prashna`, `phala`, `purvadarshana`). See `docs/vicaya-tui-plan.md` for the glossary and longer-term roadmap.
