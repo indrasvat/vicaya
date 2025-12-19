@@ -26,6 +26,7 @@ pub fn render_help(f: &mut Frame) {
         "  Tab           Cycle focus (prashna / phala / purvadarshana)",
         "  Shift+Tab     Cycle focus (reverse)",
         "  Ctrl+T        drishti switcher (type to filter)",
+        "  Ctrl+P        kriya-suchi (action palette)",
         "  Ctrl+O        Toggle purvadarshana",
         "  Ctrl+G        Cycle varga grouping (none/dir/ext)",
         "  ↓ (in input)  Move to phala",
@@ -164,6 +165,105 @@ pub fn render_drishti_switcher(f: &mut Frame, app: &AppState) {
                 .drishti_switcher
                 .selected_index
                 .min(views.len().saturating_sub(1)),
+        ));
+    }
+    f.render_stateful_widget(list, chunks[1], &mut state);
+}
+
+pub fn render_kriya_suchi(f: &mut Frame, app: &AppState) {
+    use ratatui::widgets::ListState;
+
+    let area = crate::ui::layout::centered_rect(72, 70, f.area());
+    f.render_widget(Clear, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(area);
+
+    let filter = app.ui.kriya_suchi.filter_query();
+    let filter_input = Paragraph::new(Line::from(vec![
+        Span::styled("kriya: ", Style::default().fg(ui::ACCENT)),
+        Span::styled(filter, Style::default().fg(ui::TEXT_PRIMARY)),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ui::PRIMARY))
+            .title(" kriya-suchi "),
+    )
+    .style(Style::default().bg(ui::BG_DARK));
+
+    f.render_widget(filter_input, chunks[0]);
+    let cursor_x = chunks[0].x + 1 + "kriya: ".len() as u16 + filter.len() as u16;
+    let cursor_y = chunks[0].y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
+
+    let actions = crate::kriya::filtered_kriyas(app);
+    let items: Vec<ListItem> = if actions.is_empty() {
+        vec![ListItem::new(Line::from(vec![Span::styled(
+            " (no matches)",
+            Style::default()
+                .fg(ui::TEXT_MUTED)
+                .add_modifier(Modifier::ITALIC),
+        )]))]
+    } else {
+        actions
+            .iter()
+            .map(|action| {
+                let mut spans = Vec::new();
+
+                spans.push(Span::styled(
+                    format!("{:<20}", action.label),
+                    Style::default()
+                        .fg(if action.destructive {
+                            ui::ERROR
+                        } else {
+                            ui::TEXT_PRIMARY
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ));
+
+                if !action.keys.is_empty() {
+                    spans.push(Span::styled(
+                        format!("{:<12}", action.keys),
+                        Style::default().fg(ui::PRIMARY),
+                    ));
+                } else {
+                    spans.push(Span::raw("            "));
+                }
+
+                spans.push(Span::styled(
+                    action.hint,
+                    Style::default().fg(ui::TEXT_SECONDARY),
+                ));
+
+                ListItem::new(Line::from(spans))
+            })
+            .collect()
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ui::PRIMARY))
+                .title(" choose ")
+                .style(Style::default().bg(ui::BG_DARK)),
+        )
+        .style(Style::default().bg(ui::BG_DARK))
+        .highlight_style(Style::default().bg(ui::BG_ELEVATED).fg(ui::PRIMARY))
+        .highlight_symbol("▸ ");
+
+    let mut state = ListState::default();
+    if actions.is_empty() {
+        state.select(None);
+    } else {
+        state.select(Some(
+            app.ui
+                .kriya_suchi
+                .selected_index
+                .min(actions.len().saturating_sub(1)),
         ));
     }
     f.render_stateful_widget(list, chunks[1], &mut state);

@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod client;
+mod kriya;
 pub mod state;
 pub mod ui;
 mod worker;

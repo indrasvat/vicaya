@@ -18,6 +18,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         Span::styled(" focus  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+T:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" drishti  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled("Ctrl+P:", Style::default().fg(ui::PRIMARY)),
+        Span::styled(" kriya-suchi  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+O:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" purvadarshana  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+G:", Style::default().fg(ui::PRIMARY)),

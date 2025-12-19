@@ -248,6 +248,7 @@ fn handle_key_event(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
         AppMode::Search => handle_search_keys(app, key, modifiers),
         AppMode::Help => handle_help_keys(app, key),
         AppMode::DrishtiSwitcher => handle_drishti_switcher_keys(app, key, modifiers),
+        AppMode::KriyaSuchi => handle_kriya_suchi_keys(app, key, modifiers),
         AppMode::PreviewSearch => handle_preview_search_keys(app, key, modifiers),
         AppMode::Confirm(_) => handle_confirm_keys(app, key),
     }
@@ -320,6 +321,11 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
             app.toggle_drishti_switcher();
             return;
         }
+        // Kriya-Suchi (action palette)
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            app.toggle_kriya_suchi();
+            return;
+        }
         // Toggle preview
         (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
             app.preview.toggle();
@@ -369,6 +375,56 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
         handle_results_keys(app, key, modifiers);
     } else {
         handle_preview_keys(app, key, modifiers);
+    }
+}
+
+/// Handle keys in Kriya-Suchi mode.
+fn handle_kriya_suchi_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        (KeyCode::Esc, _) => app.toggle_kriya_suchi(),
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => app.toggle_kriya_suchi(),
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => app.quit(),
+        (KeyCode::Backspace, KeyModifiers::NONE) => {
+            app.ui.kriya_suchi.pop_filter_char();
+        }
+        (KeyCode::Down, KeyModifiers::NONE) => {
+            let actions = crate::kriya::filtered_kriyas(app);
+            app.ui.kriya_suchi.select_next(actions.len());
+        }
+        (KeyCode::Up, KeyModifiers::NONE) => {
+            let actions = crate::kriya::filtered_kriyas(app);
+            app.ui.kriya_suchi.select_previous(actions.len());
+        }
+        (KeyCode::Char('j'), KeyModifiers::NONE) => {
+            if app.ui.kriya_suchi.filter_query().is_empty() {
+                let actions = crate::kriya::filtered_kriyas(app);
+                app.ui.kriya_suchi.select_next(actions.len());
+            } else {
+                app.ui.kriya_suchi.push_filter_char('j');
+            }
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) => {
+            if app.ui.kriya_suchi.filter_query().is_empty() {
+                let actions = crate::kriya::filtered_kriyas(app);
+                app.ui.kriya_suchi.select_previous(actions.len());
+            } else {
+                app.ui.kriya_suchi.push_filter_char('k');
+            }
+        }
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            let actions = crate::kriya::filtered_kriyas(app);
+            let idx = app.ui.kriya_suchi.selected_index;
+            if let Some(action) = actions.get(idx) {
+                run_kriya_action(app, action.id);
+            }
+            app.toggle_kriya_suchi();
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE) => {
+            if !c.is_whitespace() {
+                app.ui.kriya_suchi.push_filter_char(c);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -431,14 +487,7 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         }
         // Ksetra navigation (scope stack)
         (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, KeyModifiers::NONE) => {
-            if app.ksetra.pop().is_some() {
-                app.clear_results();
-                app.preview.clear();
-                app.ui.scroll_offset = 0;
-                app.search.is_searching = true;
-            } else {
-                app.error = Some("ksetra is already global".to_string());
-            }
+            pop_ksetra(app);
         }
         (KeyCode::Char('l'), KeyModifiers::NONE) | (KeyCode::Right, KeyModifiers::NONE) => {
             if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
@@ -720,6 +769,71 @@ fn push_ksetra(app: &mut AppState, path: String) {
     app.search.is_searching = true;
 }
 
+fn pop_ksetra(app: &mut AppState) {
+    if app.ksetra.pop().is_some() {
+        app.clear_results();
+        app.preview.clear();
+        app.ui.scroll_offset = 0;
+        app.search.is_searching = true;
+    } else {
+        app.error = Some("ksetra is already global".to_string());
+    }
+}
+
+fn run_kriya_action(app: &mut AppState, id: crate::kriya::KriyaId) {
+    use crate::kriya::KriyaId;
+
+    match id {
+        KriyaId::OpenOrEnter => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                if is_dir(&path, app.view) {
+                    push_ksetra(app, path);
+                } else {
+                    open_in_editor(&path, app);
+                }
+            }
+        }
+        KriyaId::CopyPath => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                copy_to_clipboard(&path, app);
+            }
+        }
+        KriyaId::Reveal => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                reveal_in_finder(&path, app);
+            }
+        }
+        KriyaId::PrintPath => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.print_on_exit = Some(path);
+                app.quit();
+            }
+        }
+        KriyaId::TogglePreview => {
+            app.preview.toggle();
+            if !app.preview.is_visible && app.search.is_preview_focused() {
+                app.search.focus = crate::state::FocusTarget::Results;
+            }
+        }
+        KriyaId::ToggleGrouping => {
+            app.ui.grouping = app.ui.grouping.next();
+            app.ui.scroll_offset = 0;
+        }
+        KriyaId::PopKsetra => {
+            pop_ksetra(app);
+        }
+        KriyaId::TogglePreviewLineNumbers => {
+            app.preview.toggle_line_numbers();
+        }
+        KriyaId::ClearPreviewSearch => {
+            app.preview.clear_search();
+        }
+        KriyaId::Quit => {
+            app.quit();
+        }
+    }
+}
+
 fn trigger_search(
     cmd_tx: &mpsc::Sender<WorkerCommand>,
     app: &mut AppState,
@@ -830,6 +944,10 @@ fn ui_render(f: &mut Frame, app: &mut AppState) {
         AppMode::DrishtiSwitcher => {
             render_search(f, app);
             ui::overlays::render_drishti_switcher(f, app);
+        }
+        AppMode::KriyaSuchi => {
+            render_search(f, app);
+            ui::overlays::render_kriya_suchi(f, app);
         }
         AppMode::PreviewSearch => {
             render_search(f, app);

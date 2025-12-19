@@ -13,6 +13,8 @@ pub enum AppMode {
     Help,
     /// Drishti (view) switcher overlay
     DrishtiSwitcher,
+    /// Kriya-Suchi (action palette) overlay
+    KriyaSuchi,
     /// Search within preview
     PreviewSearch,
     /// Confirmation dialog
@@ -101,6 +103,17 @@ impl AppState {
             _ => {
                 self.ui.drishti_switcher.reset();
                 AppMode::DrishtiSwitcher
+            }
+        };
+    }
+
+    /// Toggle Kriya-Suchi (action palette) overlay.
+    pub fn toggle_kriya_suchi(&mut self) {
+        self.mode = match self.mode {
+            AppMode::KriyaSuchi => AppMode::Search,
+            _ => {
+                self.ui.kriya_suchi.reset();
+                AppMode::KriyaSuchi
             }
         };
     }
@@ -275,6 +288,8 @@ pub struct UiState {
     pub grouping: GroupingMode,
     /// Drishti switcher state
     pub drishti_switcher: DrishtiSwitcherState,
+    /// Kriya-Suchi (action palette) state
+    pub kriya_suchi: KriyaSuchiState,
 }
 
 impl UiState {
@@ -286,6 +301,7 @@ impl UiState {
             preview_viewport_height: 0,
             grouping: GroupingMode::None,
             drishti_switcher: DrishtiSwitcherState::new(),
+            kriya_suchi: KriyaSuchiState::new(),
         }
     }
 
@@ -879,6 +895,66 @@ impl DrishtiSwitcherState {
 }
 
 impl Default for DrishtiSwitcherState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// State for the Kriya-Suchi (action palette) overlay.
+pub struct KriyaSuchiState {
+    pub selected_index: usize,
+    pub filter: String,
+}
+
+impl KriyaSuchiState {
+    pub fn new() -> Self {
+        Self {
+            selected_index: 0,
+            filter: String::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.selected_index = 0;
+        self.filter.clear();
+    }
+
+    pub fn filter_query(&self) -> &str {
+        self.filter.as_str()
+    }
+
+    pub fn push_filter_char(&mut self, c: char) {
+        self.filter.push(c);
+        self.selected_index = 0;
+    }
+
+    pub fn pop_filter_char(&mut self) {
+        let _ = self.filter.pop();
+        self.selected_index = 0;
+    }
+
+    pub fn select_next(&mut self, len: usize) {
+        if len == 0 {
+            self.selected_index = 0;
+            return;
+        }
+        self.selected_index = (self.selected_index + 1) % len;
+    }
+
+    pub fn select_previous(&mut self, len: usize) {
+        if len == 0 {
+            self.selected_index = 0;
+            return;
+        }
+        self.selected_index = if self.selected_index == 0 {
+            len.saturating_sub(1)
+        } else {
+            self.selected_index - 1
+        };
+    }
+}
+
+impl Default for KriyaSuchiState {
     fn default() -> Self {
         Self::new()
     }
