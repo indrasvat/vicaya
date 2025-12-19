@@ -204,10 +204,16 @@ fn is_socket_connectable() -> bool {
 fn wait_for_daemon_ready(pid: i32) -> crate::Result<()> {
     #[cfg(unix)]
     {
+        use std::time::{Duration, Instant};
         use std::os::unix::net::UnixStream;
 
-        // Wait up to ~2 seconds for the daemon to bind the socket.
-        for _ in 0..40 {
+        // Startup can be dominated by loading a large on-disk index snapshot, so
+        // allow a generous timeout before declaring failure.
+        //
+        // Note: readiness is defined as "the IPC socket is connectable".
+        let deadline = Instant::now() + Duration::from_secs(30);
+
+        while Instant::now() < deadline {
             // If the process died, bail early.
             if unsafe { libc::kill(pid, 0) != 0 } {
                 return Err(crate::Error::Config(
@@ -219,7 +225,7 @@ fn wait_for_daemon_ready(pid: i32) -> crate::Result<()> {
                 return Ok(());
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(50));
         }
 
         Err(crate::Error::Config(
