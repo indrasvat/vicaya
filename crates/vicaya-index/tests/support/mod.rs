@@ -66,6 +66,12 @@ pub fn corpus_files() -> Vec<TestFile> {
             mtime: 1_600_000_100,
             size: 23_456,
         },
+        TestFile {
+            path: "/Users/alice/go/pkg/mod/golang.org/x/text@v0.31.0/search/search.go",
+            name: "search.go",
+            mtime: 1_600_000_200,
+            size: 34_567,
+        },
         // Tool state / caches.
         TestFile {
             path: "/Users/alice/Library/Caches/app/cache/invoice_2024.pdf",
@@ -118,6 +124,12 @@ pub fn corpus_files() -> Vec<TestFile> {
             size: 55_555,
         },
         TestFile {
+            path: "/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go",
+            name: "search.go",
+            mtime: 1_770_000_050,
+            size: 22_222,
+        },
+        TestFile {
             path: "/Users/alice/GolandProjects/spartan-ranker/README.md",
             name: "README.md",
             mtime: 1_770_000_100,
@@ -144,6 +156,10 @@ pub fn query_suite() -> Vec<QueryCase> {
         QueryCase {
             query: "server.go",
             relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/server.go"],
+        },
+        QueryCase {
+            query: "search.go",
+            relevant_paths: &["/Users/alice/GolandProjects/spartan-ranker/handlers/search/search.go"],
         },
         QueryCase {
             query: "invoice",
