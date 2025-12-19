@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Build metadata for a running daemon or client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BuildInfo {
     #[serde(default)]
     pub version: String,
@@ -13,17 +13,6 @@ pub struct BuildInfo {
     pub timestamp: String,
     #[serde(default)]
     pub target: String,
-}
-
-impl Default for BuildInfo {
-    fn default() -> Self {
-        Self {
-            version: String::new(),
-            git_sha: String::new(),
-            timestamp: String::new(),
-            target: String::new(),
-        }
-    }
 }
 
 /// IPC request from client to daemon.
