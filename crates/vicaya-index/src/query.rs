@@ -2,6 +2,7 @@
 
 use crate::{AbbreviationMatcher, FileId, FileTable, StringArena, Trigram, TrigramIndex};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 
 /// A search query.
 #[derive(Debug, Clone)]
@@ -34,6 +35,12 @@ pub struct QueryEngine<'a> {
     trigram_index: &'a TrigramIndex,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RankFeatures {
+    context_score: i32,
+    path_depth: usize,
+}
+
 impl<'a> QueryEngine<'a> {
     /// Create a new query engine.
     pub fn new(
@@ -62,21 +69,20 @@ impl<'a> QueryEngine<'a> {
         let candidates = self.trigram_index.query(&trigrams);
 
         // Score and filter candidates
-        let mut results: Vec<_> = candidates
+        let mut ranked: Vec<(SearchResult, RankFeatures)> = candidates
             .iter()
             .filter_map(|&file_id| self.score_candidate(file_id, &normalized))
             .collect();
 
-        // Sort by score (descending)
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        self.sort_ranked_results(&mut ranked);
 
         // Limit results
-        results.truncate(query.limit);
-        results
+        ranked.truncate(query.limit);
+        ranked.into_iter().map(|(r, _)| r).collect()
     }
 
     /// Score a candidate file.
-    fn score_candidate(&self, file_id: FileId, query: &str) -> Option<SearchResult> {
+    fn score_candidate(&self, file_id: FileId, query: &str) -> Option<(SearchResult, RankFeatures)> {
         let meta = self.file_table.get(file_id)?;
 
         let path = self.string_arena.get(meta.path_offset, meta.path_len)?;
@@ -109,13 +115,21 @@ impl<'a> QueryEngine<'a> {
             (None, None) => return None,
         };
 
-        Some(SearchResult {
+        let features = RankFeatures {
+            context_score: Self::context_score(&path_lower),
+            path_depth: Self::path_depth(path),
+        };
+
+        Some((
+            SearchResult {
             path: path.to_string(),
             name: name.to_string(),
             score,
             size: meta.size,
             mtime: meta.mtime,
-        })
+        },
+            features,
+        ))
     }
 
     /// Calculate match score (0.0 to 1.0).
@@ -149,28 +163,91 @@ impl<'a> QueryEngine<'a> {
 
     /// Linear search for short queries.
     fn linear_search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        let mut results = Vec::new();
+        let mut ranked: Vec<(SearchResult, RankFeatures)> = Vec::new();
         // Early termination: if we scan 1000 files without finding any matches,
         // assume the query won't match anything and stop (prevents hang on special chars)
         const MAX_EMPTY_SCAN: usize = 1000;
 
         for (scanned, (file_id, _meta)) in self.file_table.iter().enumerate() {
-            if results.len() >= limit {
+            if ranked.len() >= limit {
                 break;
             }
 
             // Early termination for non-matching queries
-            if results.is_empty() && scanned >= MAX_EMPTY_SCAN {
+            if ranked.is_empty() && scanned >= MAX_EMPTY_SCAN {
                 break;
             }
 
             if let Some(result) = self.score_candidate(file_id, query) {
-                results.push(result);
+                ranked.push(result);
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-        results
+        self.sort_ranked_results(&mut ranked);
+        ranked.into_iter().map(|(r, _)| r).collect()
+    }
+
+    fn sort_ranked_results(&self, ranked: &mut [(SearchResult, RankFeatures)]) {
+        ranked.sort_by(|(a, af), (b, bf)| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| bf.context_score.cmp(&af.context_score))
+                .then_with(|| b.mtime.cmp(&a.mtime))
+                .then_with(|| af.path_depth.cmp(&bf.path_depth))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+    }
+
+    fn path_depth(path: &str) -> usize {
+        std::path::Path::new(path).components().count()
+    }
+
+    fn context_score(path_lower: &str) -> i32 {
+        // Ranking-only penalties for common cache/build/tool-state directories.
+        // These are intentionally conservative and only used as tie-breakers after
+        // match score so that “the best textual match” still wins.
+        //
+        // Note: This is a first iteration; later phases make this configurable.
+        let mut score = 0;
+
+        // Dependency caches.
+        if path_lower.contains("/go/pkg/mod/") {
+            score -= 100;
+        }
+        if path_lower.contains("/node_modules/") {
+            score -= 90;
+        }
+        if path_lower.contains("/.cargo/") {
+            score -= 90;
+        }
+        if path_lower.contains("/.rustup/") {
+            score -= 80;
+        }
+
+        // OS/application caches.
+        if path_lower.contains("/library/caches/") || path_lower.contains("/.cache/") {
+            score -= 80;
+        }
+
+        // Build outputs / generated artifacts.
+        if path_lower.contains("/target/")
+            || path_lower.contains("/dist/")
+            || path_lower.contains("/build/")
+            || path_lower.contains("/out/")
+        {
+            score -= 60;
+        }
+
+        // Tool state.
+        if path_lower.contains("/.git/") {
+            score -= 40;
+        }
+        if path_lower.contains("/.idea/") || path_lower.contains("/.vscode/") {
+            score -= 20;
+        }
+
+        score
     }
 }
 

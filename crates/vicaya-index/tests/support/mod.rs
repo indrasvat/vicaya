@@ -3,6 +3,8 @@
 //! This is intentionally small and deterministic so ranking changes can be
 //! measured repeatably, without depending on the developer’s local filesystem.
 
+#![allow(dead_code)]
+
 use vicaya_index::{FileMeta, FileTable, Query, QueryEngine, SearchResult, StringArena};
 use vicaya_index::TrigramIndex;
 

@@ -8,12 +8,14 @@ use vicaya_core::Config;
 struct DaemonGuard {
     vicaya_bin: PathBuf,
     vicaya_dir: PathBuf,
+    daemon_bin: PathBuf,
 }
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
         let _ = Command::new(&self.vicaya_bin)
             .env("VICAYA_DIR", &self.vicaya_dir)
+            .env("VICAYA_DAEMON_BIN", &self.daemon_bin)
             .args(["daemon", "stop"])
             .output();
     }
@@ -29,6 +31,30 @@ fn write_file(path: &Path) {
 #[test]
 fn cli_search_returns_json_results() {
     let vicaya_bin = PathBuf::from(env!("CARGO_BIN_EXE_vicaya"));
+    let daemon_bin = vicaya_bin
+        .parent()
+        .unwrap()
+        .join(format!("vicaya-daemon{}", std::env::consts::EXE_SUFFIX));
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    // Ensure we run the workspace-built daemon binary (not an installed copy).
+    // `cargo build` is incremental, so this is cheap after the first run.
+    let status = Command::new("cargo")
+        .current_dir(&workspace_root)
+        .args(["build", "-p", "vicaya-daemon"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "failed to build vicaya-daemon");
+    assert!(
+        daemon_bin.exists(),
+        "vicaya-daemon was not produced at {}",
+        daemon_bin.display()
+    );
 
     let vicaya_dir = TempDir::new().unwrap();
     let corpus_root = TempDir::new().unwrap();
@@ -76,6 +102,7 @@ fn cli_search_returns_json_results() {
     // Build the index.
     let rebuild = Command::new(&vicaya_bin)
         .env("VICAYA_DIR", vicaya_dir.path())
+        .env("VICAYA_DAEMON_BIN", &daemon_bin)
         .args(["rebuild"])
         .output()
         .unwrap();
@@ -90,11 +117,13 @@ fn cli_search_returns_json_results() {
     let _daemon_guard = DaemonGuard {
         vicaya_bin: vicaya_bin.clone(),
         vicaya_dir: vicaya_dir.path().to_path_buf(),
+        daemon_bin: daemon_bin.clone(),
     };
 
     // Search via CLI JSON output (this may auto-start the daemon).
     let search = Command::new(&vicaya_bin)
         .env("VICAYA_DIR", vicaya_dir.path())
+        .env("VICAYA_DAEMON_BIN", &daemon_bin)
         .args(["search", "server.go", "--format=json", "--limit=20"])
         .output()
         .unwrap();
@@ -118,9 +147,14 @@ fn cli_search_returns_json_results() {
         "expected at least one server.go result. got={paths:?}"
     );
 
+    assert_eq!(
+        paths.first().map(|p| p.as_str()),
+        Some(project_server.to_string_lossy().as_ref()),
+        "expected project server.go to rank first. got={paths:?}"
+    );
+
     assert!(
         paths.iter().any(|p| p == project_server.to_string_lossy().as_ref()),
         "expected project server.go in results. got={paths:?}"
     );
 }
-

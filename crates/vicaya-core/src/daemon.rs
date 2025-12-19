@@ -270,6 +270,25 @@ fn request_shutdown_via_ipc() -> crate::Result<()> {
 
 /// Find the vicaya-daemon binary.
 fn find_daemon_binary() -> crate::Result<PathBuf> {
+    // Allow tests and advanced users to pin an exact daemon binary.
+    if let Ok(path) = std::env::var("VICAYA_DAEMON_BIN") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    // Prefer a sibling `vicaya-daemon` next to the current executable (common
+    // in development builds where both binaries live in `target/*/`).
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(dir) = current.parent() {
+            let candidate = dir.join(format!("vicaya-daemon{}", std::env::consts::EXE_SUFFIX));
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
     // Try to find in PATH
     if let Ok(output) = Command::new("which").arg("vicaya-daemon").output() {
         if output.status.success() {
