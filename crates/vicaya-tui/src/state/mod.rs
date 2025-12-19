@@ -13,6 +13,8 @@ pub enum AppMode {
     Help,
     /// Drishti (view) switcher overlay
     DrishtiSwitcher,
+    /// Search within preview
+    PreviewSearch,
     /// Confirmation dialog
     Confirm(Action),
 }
@@ -907,6 +909,25 @@ pub struct StyledSegment {
 
 pub type StyledLine = Vec<StyledSegment>;
 
+pub fn compute_content_line_numbers(lines: &[StyledLine]) -> Vec<Option<usize>> {
+    let mut next = 0usize;
+    lines
+        .iter()
+        .map(|line| {
+            let is_meta =
+                !line.is_empty() && line.iter().all(|seg| seg.style.kind == TextKind::Meta);
+            let is_error = line.iter().any(|seg| seg.style.kind == TextKind::Error);
+
+            if is_meta || is_error {
+                None
+            } else {
+                next += 1;
+                Some(next)
+            }
+        })
+        .collect()
+}
+
 /// Preview state for the selected item.
 pub struct PreviewState {
     pub is_visible: bool,
@@ -915,7 +936,12 @@ pub struct PreviewState {
     pub path: Option<String>,
     pub title: String,
     pub lines: Vec<StyledLine>,
+    pub content_line_numbers: Vec<Option<usize>>,
     pub scroll: u16,
+    pub show_line_numbers: bool,
+    pub search_query: String,
+    pub search_input: String,
+    pub search_cursor: usize,
 }
 
 impl PreviewState {
@@ -927,7 +953,12 @@ impl PreviewState {
             path: None,
             title: String::new(),
             lines: Vec::new(),
+            content_line_numbers: Vec::new(),
             scroll: 0,
+            show_line_numbers: false,
+            search_query: String::new(),
+            search_input: String::new(),
+            search_cursor: 0,
         }
     }
 
@@ -937,11 +968,62 @@ impl PreviewState {
         self.path = None;
         self.title.clear();
         self.lines.clear();
+        self.content_line_numbers.clear();
         self.scroll = 0;
     }
 
     pub fn toggle(&mut self) {
         self.is_visible = !self.is_visible;
+    }
+
+    pub fn toggle_line_numbers(&mut self) {
+        self.show_line_numbers = !self.show_line_numbers;
+    }
+
+    pub fn start_search(&mut self) {
+        self.search_input = self.search_query.clone();
+        self.search_cursor = self.search_input.len();
+    }
+
+    pub fn cancel_search(&mut self) {
+        self.search_input = self.search_query.clone();
+        self.search_cursor = self.search_input.len();
+    }
+
+    pub fn apply_search(&mut self) {
+        self.search_query = self.search_input.trim().to_string();
+        self.search_cursor = self.search_input.len();
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search_query.clear();
+        self.search_input.clear();
+        self.search_cursor = 0;
+    }
+
+    pub fn insert_search_char(&mut self, c: char) {
+        self.search_input.insert(self.search_cursor, c);
+        self.search_cursor += 1;
+    }
+
+    pub fn delete_search_char(&mut self) {
+        if self.search_cursor == 0 {
+            return;
+        }
+        self.search_input.remove(self.search_cursor - 1);
+        self.search_cursor -= 1;
+    }
+
+    pub fn move_search_cursor_left(&mut self) {
+        if self.search_cursor > 0 {
+            self.search_cursor -= 1;
+        }
+    }
+
+    pub fn move_search_cursor_right(&mut self) {
+        if self.search_cursor < self.search_input.len() {
+            self.search_cursor += 1;
+        }
     }
 }
 
@@ -992,5 +1074,36 @@ mod tests {
         ksetra.push(PathBuf::from("/tmp/project"));
         ksetra.push(PathBuf::from("/tmp/project/src"));
         assert_eq!(ksetra.breadcrumbs(), "/tmp/project ▸ src");
+    }
+
+    #[test]
+    fn compute_content_line_numbers_skips_meta() {
+        let lines = vec![
+            vec![StyledSegment {
+                text: "meta".to_string(),
+                style: TextStyle {
+                    kind: TextKind::Meta,
+                    ..Default::default()
+                },
+            }],
+            vec![StyledSegment {
+                text: "".to_string(),
+                style: TextStyle {
+                    kind: TextKind::Meta,
+                    ..Default::default()
+                },
+            }],
+            vec![StyledSegment {
+                text: "a".to_string(),
+                style: TextStyle::default(),
+            }],
+            vec![StyledSegment {
+                text: "b".to_string(),
+                style: TextStyle::default(),
+            }],
+        ];
+
+        let nums = compute_content_line_numbers(&lines);
+        assert_eq!(nums, vec![None, None, Some(1), Some(2)]);
     }
 }

@@ -136,6 +136,8 @@ fn run_app<B: ratatui::backend::Backend>(
                         app.preview.path = Some(path);
                         app.preview.title = title;
                         app.preview.lines = lines;
+                        app.preview.content_line_numbers =
+                            crate::state::compute_content_line_numbers(&app.preview.lines);
                     }
                 }
             }
@@ -211,6 +213,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     app.preview.path = Some(result.path.clone());
                     app.preview.title = result.name.clone();
                     app.preview.lines.clear();
+                    app.preview.content_line_numbers.clear();
                     app.preview.scroll = 0;
                     let _ = cmd_tx.send(WorkerCommand::Preview {
                         id: active_preview_id,
@@ -245,6 +248,7 @@ fn handle_key_event(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
         AppMode::Search => handle_search_keys(app, key, modifiers),
         AppMode::Help => handle_help_keys(app, key),
         AppMode::DrishtiSwitcher => handle_drishti_switcher_keys(app, key, modifiers),
+        AppMode::PreviewSearch => handle_preview_search_keys(app, key, modifiers),
         AppMode::Confirm(_) => handle_confirm_keys(app, key),
     }
 }
@@ -480,6 +484,22 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
 /// Handle keys when preview is focused
 fn handle_preview_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
     match (key, modifiers) {
+        (KeyCode::Char('/'), KeyModifiers::NONE) => {
+            app.preview.start_search();
+            app.mode = AppMode::PreviewSearch;
+        }
+        (KeyCode::Char('n'), KeyModifiers::NONE) => {
+            jump_preview_match(app, 1, false);
+        }
+        (KeyCode::Char('N'), KeyModifiers::SHIFT) => {
+            jump_preview_match(app, -1, false);
+        }
+        (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            app.preview.toggle_line_numbers();
+        }
+        (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
+            app.preview.clear_search();
+        }
         (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, KeyModifiers::NONE) => {
             scroll_preview_by(app, 1);
         }
@@ -499,6 +519,38 @@ fn handle_preview_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         }
         (KeyCode::Char('G'), KeyModifiers::SHIFT) => {
             app.preview.scroll = preview_max_scroll(app);
+        }
+        _ => {}
+    }
+}
+
+fn handle_preview_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            app.quit();
+        }
+        (KeyCode::Esc, _) => {
+            app.preview.cancel_search();
+            app.mode = AppMode::Search;
+        }
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            app.preview.apply_search();
+            app.mode = AppMode::Search;
+            if !app.preview.search_query.is_empty() {
+                jump_preview_match(app, 1, true);
+            }
+        }
+        (KeyCode::Backspace, KeyModifiers::NONE) => {
+            app.preview.delete_search_char();
+        }
+        (KeyCode::Left, KeyModifiers::NONE) => {
+            app.preview.move_search_cursor_left();
+        }
+        (KeyCode::Right, KeyModifiers::NONE) => {
+            app.preview.move_search_cursor_right();
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+            app.preview.insert_search_char(c);
         }
         _ => {}
     }
@@ -556,6 +608,93 @@ fn scroll_preview_by(app: &mut AppState, delta: i32) {
     let max = preview_max_scroll(app) as i32;
     let next = (current + delta).clamp(0, max);
     app.preview.scroll = next as u16;
+}
+
+fn jump_preview_match(app: &mut AppState, direction: i32, include_current: bool) {
+    let needle = if app.mode == AppMode::PreviewSearch {
+        app.preview.search_input.trim().to_string()
+    } else {
+        app.preview.search_query.trim().to_string()
+    };
+
+    if needle.is_empty() || app.preview.lines.is_empty() {
+        return;
+    }
+
+    let len = app.preview.lines.len();
+    let start = app.preview.scroll as usize;
+    let start = start.min(len.saturating_sub(1));
+    let start = if include_current {
+        start
+    } else if direction >= 0 {
+        (start + 1) % len
+    } else if start == 0 {
+        len.saturating_sub(1)
+    } else {
+        start - 1
+    };
+
+    let needle_ascii_lower = needle.is_ascii().then(|| needle.to_ascii_lowercase());
+    let needle_ascii_lower = needle_ascii_lower.as_deref();
+
+    let Some(line_idx) = find_next_match_line(
+        &app.preview.lines,
+        &needle,
+        needle_ascii_lower,
+        start,
+        direction,
+    ) else {
+        app.error = Some("no preview matches".to_string());
+        return;
+    };
+
+    let viewport = app.ui.preview_viewport_height.max(1);
+    let max_scroll = preview_max_scroll(app);
+    let target = line_idx.saturating_sub(viewport / 2);
+    app.preview.scroll = (target.min(max_scroll as usize)).min(u16::MAX as usize) as u16;
+}
+
+fn find_next_match_line(
+    lines: &[crate::state::StyledLine],
+    needle: &str,
+    needle_ascii_lower: Option<&str>,
+    start_line: usize,
+    direction: i32,
+) -> Option<usize> {
+    let len = lines.len();
+    if len == 0 {
+        return None;
+    }
+
+    let contains = |idx: usize| -> bool {
+        let mut text = String::new();
+        for seg in &lines[idx] {
+            text.push_str(seg.text.as_str());
+        }
+        if let Some(needle_ascii_lower) = needle_ascii_lower {
+            if text.is_ascii() {
+                return text.to_ascii_lowercase().contains(needle_ascii_lower);
+            }
+        }
+        text.contains(needle)
+    };
+
+    let mut idx = start_line.min(len.saturating_sub(1));
+    for _ in 0..len {
+        if contains(idx) {
+            return Some(idx);
+        }
+
+        if direction >= 0 {
+            idx = (idx + 1) % len;
+        } else if idx == 0 {
+            idx = len.saturating_sub(1);
+        } else {
+            idx -= 1;
+        }
+    }
+
+    None
 }
 
 /// Open file in $EDITOR or fallback editor
@@ -691,6 +830,10 @@ fn ui_render(f: &mut Frame, app: &mut AppState) {
         AppMode::DrishtiSwitcher => {
             render_search(f, app);
             ui::overlays::render_drishti_switcher(f, app);
+        }
+        AppMode::PreviewSearch => {
+            render_search(f, app);
+            ui::overlays::render_preview_search(f, app);
         }
         AppMode::Confirm(_) => ui::overlays::render_confirm(f, app),
     }

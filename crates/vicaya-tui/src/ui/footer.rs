@@ -41,6 +41,17 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         ]);
     }
 
+    if app.search.is_preview_focused() || app.mode == crate::state::AppMode::PreviewSearch {
+        spans.extend(vec![
+            Span::styled("/:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" find  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("n/N:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" next/prev  ", Style::default().fg(ui::TEXT_SECONDARY)),
+            Span::styled("Ctrl+N:", Style::default().fg(ui::PRIMARY)),
+            Span::styled(" lines  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        ]);
+    }
+
     spans.extend(vec![
         Span::styled("Esc:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" clear  ", Style::default().fg(ui::TEXT_SECONDARY)),

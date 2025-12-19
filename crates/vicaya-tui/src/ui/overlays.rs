@@ -3,6 +3,7 @@
 use crate::state::AppState;
 use crate::ui;
 use ratatui::{
+    layout::Rect,
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
     text::{Line, Span},
@@ -39,6 +40,9 @@ pub fn render_help(f: &mut Frame) {
         "Preview (purvadarshana):",
         "  PgUp / PgDn   Scroll preview",
         "  Ctrl+U / Ctrl+D  Scroll preview",
+        "  /             Search in preview",
+        "  n / N         Next / previous match",
+        "  Ctrl+N        Toggle line numbers",
         "",
         "Actions (phala):",
         "  Enter / o     Open (files) / Enter scope (dirs)",
@@ -163,4 +167,56 @@ pub fn render_drishti_switcher(f: &mut Frame, app: &AppState) {
         ));
     }
     f.render_stateful_widget(list, chunks[1], &mut state);
+}
+
+pub fn render_preview_search(f: &mut Frame, app: &AppState) {
+    let root = f.area();
+    let width = ((root.width as f32) * 0.72) as u16;
+    let width = width.clamp(40, root.width.saturating_sub(2));
+    let height = 5u16;
+    let area = centered_fixed_rect(width, height, root);
+
+    f.render_widget(Clear, area);
+
+    let query = app.preview.search_input.as_str();
+    let input = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("purvadarshana /: ", Style::default().fg(ui::ACCENT)),
+            Span::styled(query, Style::default().fg(ui::TEXT_PRIMARY)),
+        ]),
+        Line::from(vec![Span::styled(
+            "Enter: apply   Esc: cancel",
+            Style::default()
+                .fg(ui::TEXT_SECONDARY)
+                .add_modifier(Modifier::ITALIC),
+        )]),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ui::PRIMARY))
+            .title(" preview search ")
+            .style(Style::default().bg(ui::BG_DARK)),
+    )
+    .style(Style::default().bg(ui::BG_DARK));
+
+    f.render_widget(input, area);
+
+    let cursor_x = area.x + 1 + "purvadarshana /: ".len() as u16 + app.preview.search_cursor as u16;
+    let cursor_y = area.y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn centered_fixed_rect(width: u16, height: u16, r: Rect) -> Rect {
+    let width = width.min(r.width);
+    let height = height.min(r.height);
+
+    let x = r.x + (r.width.saturating_sub(width)) / 2;
+    let y = r.y + (r.height.saturating_sub(height)) / 2;
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
 }
