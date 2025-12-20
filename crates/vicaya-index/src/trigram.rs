@@ -122,6 +122,19 @@ impl TrigramIndex {
     pub fn trigram_count(&self) -> usize {
         self.index.len()
     }
+
+    /// Approximate heap bytes used by the trigram index.
+    pub fn allocated_bytes(&self) -> usize {
+        let entries_bytes = self.index.capacity() * std::mem::size_of::<(Trigram, Vec<FileId>)>();
+        let control_bytes = self.index.capacity();
+        let postings_bytes: usize = self
+            .index
+            .values()
+            .map(|posting_list| posting_list.capacity() * std::mem::size_of::<FileId>())
+            .sum();
+
+        entries_bytes + control_bytes + postings_bytes
+    }
 }
 
 impl Default for TrigramIndex {

@@ -43,7 +43,7 @@ Latest coverage report: [Codecov dashboard](https://codecov.io/gh/indrasvat/vica
 
 ### Prerequisites
 
-- Rust 1.70+ (stable toolchain)
+- Rust 1.91+ (stable toolchain; see `rust-toolchain.toml`)
 - macOS 10.15+ (Catalina or later)
 
 ### Build & Test
@@ -90,6 +90,17 @@ vicaya search "main.rs" --limit 10
 
 # Check daemon/index status
 vicaya status
+
+# Inspect runtime memory/health (includes `vmmap -summary` on macOS)
+vicaya metrics
+vicaya metrics --format json
+vicaya metrics --no-vmmap
+
+# Live metrics stream (JSONL); `vmmap` is throttled by default
+vicaya metrics watch --format jsonl --interval 1s --vmmap-every 30
+
+# End-to-end IPC latency benchmark (percentiles + optional vmmap before/after)
+vicaya metrics bench --queries /tmp/vicaya-bench-queries.txt --warmup 50 --runs 500 --limit 20 --vmmap-before-after
 
 # Output formats
 vicaya search "config" --format json

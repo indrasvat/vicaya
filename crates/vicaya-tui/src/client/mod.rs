@@ -80,6 +80,8 @@ impl IpcClient {
                 indexed_files,
                 trigram_count,
                 arena_size,
+                index_allocated_bytes: _,
+                state_allocated_bytes: _,
                 last_updated,
                 reconciling,
             } => Ok(DaemonStatus {

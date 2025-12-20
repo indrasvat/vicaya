@@ -52,6 +52,12 @@ pub enum Response {
         indexed_files: usize,
         trigram_count: usize,
         arena_size: usize,
+        /// Approximate heap bytes used by index structures.
+        #[serde(default)]
+        index_allocated_bytes: u64,
+        /// Approximate heap bytes used by daemon state (index + maps).
+        #[serde(default)]
+        state_allocated_bytes: u64,
         last_updated: i64,
         /// Whether the daemon is currently rebuilding/reconciling the index.
         #[serde(default)]
@@ -164,6 +170,8 @@ mod tests {
             indexed_files: 100,
             trigram_count: 500,
             arena_size: 2048,
+            index_allocated_bytes: 0,
+            state_allocated_bytes: 0,
             last_updated: 1234567890,
             reconciling: false,
         };

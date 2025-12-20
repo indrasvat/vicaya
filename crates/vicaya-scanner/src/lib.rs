@@ -1,6 +1,6 @@
 //! vicaya-scanner: Parallel filesystem scanner.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::{debug, info, warn};
 use vicaya_core::{Config, Result};
 use vicaya_index::{FileMeta, FileTable, StringArena, TrigramIndex};
@@ -8,7 +8,6 @@ use walkdir::WalkDir;
 
 /// Scanned file information.
 pub struct ScannedFile {
-    pub path: PathBuf,
     pub size: u64,
     pub mtime: i64,
     pub dev: u64,
@@ -56,21 +55,46 @@ impl Scanner {
         string_arena: &mut StringArena,
         trigram_index: &mut TrigramIndex,
     ) -> Result<()> {
-        let files: Vec<_> = WalkDir::new(root)
+        let mut scanned_entries = 0usize;
+        let mut entry_errors = 0usize;
+        for entry in WalkDir::new(root)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| self.should_index(e.path()))
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file() || e.file_type().is_dir())
-            .collect();
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => {
+                    entry_errors += 1;
+                    continue;
+                }
+            };
 
-        debug!("Found {} files in {}", files.len(), root.display());
+            if !(entry.file_type().is_file() || entry.file_type().is_dir()) {
+                continue;
+            }
 
-        for entry in files {
+            scanned_entries += 1;
             if let Some(scanned) = self.scan_file(entry.path()) {
-                self.add_to_index(scanned, file_table, string_arena, trigram_index);
+                self.add_to_index(
+                    entry.path(),
+                    scanned,
+                    file_table,
+                    string_arena,
+                    trigram_index,
+                );
             }
         }
+
+        if entry_errors > 0 {
+            warn!(
+                "Skipped {} unreadable entries under {} (permissions?)",
+                entry_errors,
+                root.display()
+            );
+        }
+
+        debug!("Scanned {} entries in {}", scanned_entries, root.display());
 
         Ok(())
     }
@@ -101,7 +125,6 @@ impl Scanner {
             .as_secs() as i64;
 
         Some(ScannedFile {
-            path: path.to_path_buf(),
             size: metadata.len(),
             mtime,
             dev: metadata.dev(),
@@ -112,14 +135,14 @@ impl Scanner {
     /// Add a scanned file to the index structures.
     fn add_to_index(
         &self,
+        path: &Path,
         file: ScannedFile,
         file_table: &mut FileTable,
         string_arena: &mut StringArena,
         trigram_index: &mut TrigramIndex,
     ) {
-        let path_str = file.path.to_string_lossy();
-        let name = file
-            .path
+        let path_str = path.to_string_lossy();
+        let name = path
             .file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
@@ -156,18 +179,30 @@ pub struct IndexSnapshot {
 impl IndexSnapshot {
     /// Save the snapshot to disk.
     pub fn save(&self, path: &Path) -> Result<()> {
-        let data = bincode::serialize(&(&self.file_table, &self.string_arena, &self.trigram_index))
-            .map_err(|e| vicaya_core::Error::Serialization(e.to_string()))?;
+        use std::io::{BufWriter, Write};
 
-        std::fs::write(path, data)?;
+        let file = std::fs::File::create(path)?;
+        let mut writer = BufWriter::new(file);
+
+        bincode::serialize_into(
+            &mut writer,
+            &(&self.file_table, &self.string_arena, &self.trigram_index),
+        )
+        .map_err(|e| vicaya_core::Error::Serialization(e.to_string()))?;
+
+        writer.flush()?;
         info!("Index snapshot saved to {}", path.display());
         Ok(())
     }
 
     /// Load a snapshot from disk.
     pub fn load(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path)?;
-        let (file_table, string_arena, trigram_index) = bincode::deserialize(&data)
+        use std::io::BufReader;
+
+        let file = std::fs::File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let (file_table, string_arena, trigram_index) = bincode::deserialize_from(reader)
             .map_err(|e| vicaya_core::Error::Serialization(e.to_string()))?;
 
         info!("Index snapshot loaded from {}", path.display());

@@ -132,32 +132,39 @@ fn replay_journal(state: &SharedState, journal_file: &Path) -> Result<()> {
     }
 
     let file = std::fs::File::open(journal_file)?;
-    let reader = std::io::BufReader::new(file);
+    let mut reader = std::io::BufReader::new(file);
 
-    let mut updates = Vec::new();
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
+    let mut applied = 0usize;
+    let mut line = String::new();
+
+    let mut state = state.write().unwrap();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
             Err(e) => {
                 warn!("Failed to read journal line: {}", e);
                 continue;
             }
-        };
+        }
 
-        match serde_json::from_str::<vicaya_watcher::IndexUpdate>(&line) {
-            Ok(update) => updates.push(update),
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<vicaya_watcher::IndexUpdate>(trimmed) {
+            Ok(update) => {
+                state.apply_update(update);
+                applied += 1;
+            }
             Err(e) => warn!("Skipping invalid journal entry: {}", e),
         }
     }
 
-    if updates.is_empty() {
-        return Ok(());
-    }
-
-    info!("Replaying {} journal updates...", updates.len());
-    let mut state = state.write().unwrap();
-    for update in updates {
-        state.apply_update(update);
+    if applied > 0 {
+        info!("Replayed {} journal updates", applied);
     }
     Ok(())
 }
