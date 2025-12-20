@@ -83,6 +83,11 @@ impl FileTable {
         self.entries.len()
     }
 
+    /// Approximate heap bytes used by the table storage.
+    pub fn allocated_bytes(&self) -> usize {
+        self.entries.capacity() * std::mem::size_of::<FileMeta>()
+    }
+
     /// Check if the table is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()

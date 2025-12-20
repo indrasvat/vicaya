@@ -1,5 +1,7 @@
 //! IPC server for daemon communication.
 
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -21,7 +23,9 @@ pub struct DaemonState {
     pub index_file: PathBuf,
     pub journal_file: PathBuf,
     pub snapshot: IndexSnapshot,
-    pub path_to_id: std::collections::HashMap<String, FileId>,
+    pub path_hasher: RandomState,
+    pub path_to_id: std::collections::HashMap<u64, FileId>,
+    pub path_hash_collisions: std::collections::HashMap<u64, Vec<FileId>>,
     pub inode_to_id: std::collections::HashMap<(u64, u64), FileId>,
     pub last_updated: i64,
     pub reconciling: bool,
@@ -34,7 +38,8 @@ impl DaemonState {
         journal_file: PathBuf,
         snapshot: IndexSnapshot,
     ) -> Self {
-        let path_to_id = build_path_map(&snapshot);
+        let path_hasher = RandomState::new();
+        let (path_to_id, path_hash_collisions) = build_path_map(&snapshot, &path_hasher);
         let inode_to_id = build_inode_map(&snapshot);
         let last_updated = index_file
             .metadata()
@@ -49,7 +54,9 @@ impl DaemonState {
             index_file,
             journal_file,
             snapshot,
+            path_hasher,
             path_to_id,
+            path_hash_collisions,
             inode_to_id,
             last_updated,
             reconciling: false,
@@ -72,6 +79,132 @@ impl DaemonState {
 
     fn should_index(&self, path: &Path) -> bool {
         vicaya_core::filter::should_index_path(path, &self.config.exclusions)
+    }
+
+    fn indexed_file_count(&self) -> usize {
+        self.path_to_id.len()
+            + self
+                .path_hash_collisions
+                .values()
+                .map(|ids| ids.len())
+                .sum::<usize>()
+    }
+
+    fn estimated_index_allocated_bytes(&self) -> u64 {
+        (self.snapshot.file_table.allocated_bytes()
+            + self.snapshot.string_arena.allocated_bytes()
+            + self.snapshot.trigram_index.allocated_bytes()) as u64
+    }
+
+    fn estimated_state_allocated_bytes(&self) -> u64 {
+        let collisions_vec_bytes: usize = self
+            .path_hash_collisions
+            .values()
+            .map(|ids| ids.capacity() * std::mem::size_of::<FileId>())
+            .sum();
+
+        (self.estimated_index_allocated_bytes() as usize
+            + hash_map_allocated_bytes(&self.path_to_id)
+            + hash_map_allocated_bytes(&self.path_hash_collisions)
+            + collisions_vec_bytes
+            + hash_map_allocated_bytes(&self.inode_to_id)) as u64
+    }
+
+    fn path_hash(&self, path: &str) -> u64 {
+        self.path_hasher.hash_one(path)
+    }
+
+    fn file_id_matches_path(&self, file_id: FileId, path: &str) -> bool {
+        let Some(meta) = self.snapshot.file_table.get(file_id) else {
+            return false;
+        };
+        let Some(existing_path) = self
+            .snapshot
+            .string_arena
+            .get(meta.path_offset, meta.path_len)
+        else {
+            return false;
+        };
+        existing_path == path
+    }
+
+    fn get_file_id_for_path(&self, path: &str) -> Option<FileId> {
+        let hash = self.path_hash(path);
+
+        if let Some(ids) = self.path_hash_collisions.get(&hash) {
+            return ids
+                .iter()
+                .copied()
+                .find(|&file_id| self.file_id_matches_path(file_id, path));
+        }
+
+        let file_id = self.path_to_id.get(&hash).copied()?;
+        self.file_id_matches_path(file_id, path).then_some(file_id)
+    }
+
+    fn insert_path_mapping(&mut self, path: &str, file_id: FileId) {
+        let hash = self.path_hash(path);
+
+        if let Some(ids) = self.path_hash_collisions.get_mut(&hash) {
+            ids.push(file_id);
+            return;
+        }
+
+        let Some(existing) = self.path_to_id.get(&hash).copied() else {
+            self.path_to_id.insert(hash, file_id);
+            return;
+        };
+
+        if self.file_id_matches_path(existing, path) {
+            self.path_to_id.insert(hash, file_id);
+            return;
+        }
+
+        self.path_to_id.remove(&hash);
+        self.path_hash_collisions
+            .insert(hash, vec![existing, file_id]);
+    }
+
+    fn remove_path_mapping(&mut self, path: &str) -> Option<FileId> {
+        let hash = self.path_hash(path);
+        let snapshot = &self.snapshot;
+
+        if let Some(ids) = self.path_hash_collisions.get_mut(&hash) {
+            let pos = ids.iter().position(|&file_id| {
+                let Some(meta) = snapshot.file_table.get(file_id) else {
+                    return false;
+                };
+                let Some(existing_path) =
+                    snapshot.string_arena.get(meta.path_offset, meta.path_len)
+                else {
+                    return false;
+                };
+                existing_path == path
+            })?;
+            let file_id = ids.remove(pos);
+
+            match ids.len() {
+                0 => {
+                    self.path_hash_collisions.remove(&hash);
+                }
+                1 => {
+                    let remaining = ids[0];
+                    self.path_hash_collisions.remove(&hash);
+                    self.path_to_id.insert(hash, remaining);
+                }
+                _ => {}
+            }
+
+            return Some(file_id);
+        }
+
+        let file_id = self.path_to_id.get(&hash).copied()?;
+        if !self.file_id_matches_path(file_id, path) {
+            return None;
+        }
+
+        self.path_to_id.remove(&hash);
+        Some(file_id)
     }
 
     fn upsert_path(&mut self, path: &Path) {
@@ -101,29 +234,18 @@ impl DaemonState {
         let ino = metadata.ino();
         let size = metadata.len();
 
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = path.to_string_lossy();
         let name_str = path
             .file_name()
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-
-        let (path_offset, path_len) = self.snapshot.string_arena.add(&path_str);
-        let (name_offset, name_len) = self.snapshot.string_arena.add(&name_str);
-
-        let new_meta = FileMeta {
-            path_offset,
-            path_len,
-            name_offset,
-            name_len,
-            size,
-            mtime,
-            dev,
-            ino,
-        };
+        if name_str.is_empty() {
+            return;
+        }
 
         let inode_key = (dev, ino);
 
-        if let Some(&file_id) = self.path_to_id.get(&path_str) {
+        if let Some(file_id) = self.get_file_id_for_path(path_str.as_ref()) {
             let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
                 return;
             };
@@ -142,43 +264,88 @@ impl DaemonState {
                 .get(meta.name_offset, meta.name_len)
                 .unwrap_or("");
 
-            if old_name != name_str {
+            if old_name != name_str.as_ref() {
                 self.snapshot.trigram_index.remove_text(file_id, old_name);
-                self.snapshot.trigram_index.add(file_id, &name_str);
+                self.snapshot.trigram_index.add(file_id, name_str.as_ref());
+
+                let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+                meta.name_offset = name_offset;
+                meta.name_len = name_len;
             }
 
-            *meta = new_meta;
+            meta.size = size;
+            meta.mtime = mtime;
+            meta.dev = dev;
+            meta.ino = ino;
         } else if let Some(&file_id) = self.inode_to_id.get(&inode_key) {
             // Same inode (dev+ino) already exists in the index under a different path; treat this
             // as a move/rename even if the watcher didn't report the old path.
-            if let Some(meta) = self.snapshot.file_table.get_mut(file_id) {
-                if let Some(old_path) = self
+            let (old_path, old_name) = {
+                let Some(meta) = self.snapshot.file_table.get(file_id) else {
+                    return;
+                };
+
+                let old_path = self
                     .snapshot
                     .string_arena
                     .get(meta.path_offset, meta.path_len)
-                    .map(|s| s.to_string())
-                {
-                    self.path_to_id.remove(&old_path);
-                }
+                    .unwrap_or("")
+                    .to_string();
 
                 let old_name = self
                     .snapshot
                     .string_arena
                     .get(meta.name_offset, meta.name_len)
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .to_string();
 
-                if old_name != name_str {
-                    self.snapshot.trigram_index.remove_text(file_id, old_name);
-                    self.snapshot.trigram_index.add(file_id, &name_str);
-                }
+                (old_path, old_name)
+            };
 
-                *meta = new_meta;
-                self.path_to_id.insert(path_str, file_id);
+            if !old_path.is_empty() {
+                let _ = self.remove_path_mapping(&old_path);
             }
+
+            let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
+                return;
+            };
+
+            if old_name != name_str.as_ref() {
+                self.snapshot.trigram_index.remove_text(file_id, &old_name);
+                self.snapshot.trigram_index.add(file_id, name_str.as_ref());
+
+                let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+                meta.name_offset = name_offset;
+                meta.name_len = name_len;
+            }
+
+            let (path_offset, path_len) = self.snapshot.string_arena.add(path_str.as_ref());
+            meta.path_offset = path_offset;
+            meta.path_len = path_len;
+            meta.size = size;
+            meta.mtime = mtime;
+            meta.dev = dev;
+            meta.ino = ino;
+
+            self.insert_path_mapping(path_str.as_ref(), file_id);
         } else {
+            let (path_offset, path_len) = self.snapshot.string_arena.add(path_str.as_ref());
+            let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+
+            let new_meta = FileMeta {
+                path_offset,
+                path_len,
+                name_offset,
+                name_len,
+                size,
+                mtime,
+                dev,
+                ino,
+            };
+
             let file_id = self.snapshot.file_table.insert(new_meta);
-            self.snapshot.trigram_index.add(file_id, &name_str);
-            self.path_to_id.insert(path_str, file_id);
+            self.snapshot.trigram_index.add(file_id, name_str.as_ref());
+            self.insert_path_mapping(path_str.as_ref(), file_id);
             self.inode_to_id.insert(inode_key, file_id);
         }
 
@@ -186,8 +353,8 @@ impl DaemonState {
     }
 
     fn remove_path(&mut self, path: &Path) {
-        let path_str = path.to_string_lossy().to_string();
-        let Some(file_id) = self.path_to_id.remove(&path_str) else {
+        let path_str = path.to_string_lossy();
+        let Some(file_id) = self.remove_path_mapping(path_str.as_ref()) else {
             return;
         };
 
@@ -221,8 +388,8 @@ impl DaemonState {
     }
 
     fn move_path(&mut self, from: &Path, to: &Path) {
-        let from_str = from.to_string_lossy().to_string();
-        let Some(file_id) = self.path_to_id.remove(&from_str) else {
+        let from_str = from.to_string_lossy();
+        let Some(file_id) = self.remove_path_mapping(from_str.as_ref()) else {
             // If we didn't know about the old path, treat as a create on the new path.
             self.upsert_path(to);
             return;
@@ -259,11 +426,15 @@ impl DaemonState {
         let ino = metadata.ino();
         let size = metadata.len();
 
-        let to_str = to.to_string_lossy().to_string();
+        let to_str = to.to_string_lossy();
         let name_str = to
             .file_name()
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|n| n.to_string_lossy())
             .unwrap_or_default();
+        if name_str.is_empty() {
+            self.tombstone_file(file_id);
+            return;
+        }
 
         let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
             return;
@@ -277,18 +448,19 @@ impl DaemonState {
             .get(meta.name_offset, meta.name_len)
             .unwrap_or("");
 
-        if old_name != name_str {
+        if old_name != name_str.as_ref() {
             self.snapshot.trigram_index.remove_text(file_id, old_name);
-            self.snapshot.trigram_index.add(file_id, &name_str);
+            self.snapshot.trigram_index.add(file_id, name_str.as_ref());
+
+            let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+            meta.name_offset = name_offset;
+            meta.name_len = name_len;
         }
 
-        let (path_offset, path_len) = self.snapshot.string_arena.add(&to_str);
-        let (name_offset, name_len) = self.snapshot.string_arena.add(&name_str);
+        let (path_offset, path_len) = self.snapshot.string_arena.add(to_str.as_ref());
 
         meta.path_offset = path_offset;
         meta.path_len = path_len;
-        meta.name_offset = name_offset;
-        meta.name_len = name_len;
         meta.size = size;
         meta.mtime = mtime;
         meta.dev = dev;
@@ -304,7 +476,7 @@ impl DaemonState {
             self.inode_to_id.insert(new_inode_key, file_id);
         }
 
-        self.path_to_id.insert(to_str, file_id);
+        self.insert_path_mapping(to_str.as_ref(), file_id);
         self.last_updated = now_epoch_seconds();
     }
 }
@@ -316,17 +488,60 @@ fn now_epoch_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-fn build_path_map(snapshot: &IndexSnapshot) -> std::collections::HashMap<String, FileId> {
+fn hash_map_allocated_bytes<K, V>(map: &std::collections::HashMap<K, V>) -> usize {
+    // `HashMap` allocates a contiguous bucket array plus a control byte array.
+    // We approximate control bytes as 1 byte per bucket (hashbrown SwissTable style).
+    map.capacity() * std::mem::size_of::<(K, V)>() + map.capacity()
+}
+
+fn snapshot_path_for_id(snapshot: &IndexSnapshot, file_id: FileId) -> Option<&str> {
+    let meta = snapshot.file_table.get(file_id)?;
+    snapshot.string_arena.get(meta.path_offset, meta.path_len)
+}
+
+fn build_path_map(
+    snapshot: &IndexSnapshot,
+    hasher: &RandomState,
+) -> (
+    std::collections::HashMap<u64, FileId>,
+    std::collections::HashMap<u64, Vec<FileId>>,
+) {
     let mut map = std::collections::HashMap::with_capacity(snapshot.file_table.len());
+    let mut collisions = std::collections::HashMap::<u64, Vec<FileId>>::new();
+
     for (file_id, meta) in snapshot.file_table.iter() {
         if meta.path_len == 0 {
             continue;
         }
-        if let Some(path) = snapshot.string_arena.get(meta.path_offset, meta.path_len) {
-            map.insert(path.to_string(), file_id);
+
+        let Some(path) = snapshot.string_arena.get(meta.path_offset, meta.path_len) else {
+            continue;
+        };
+
+        let hash = hasher.hash_one(path);
+
+        if let Some(ids) = collisions.get_mut(&hash) {
+            ids.push(file_id);
+            continue;
         }
+
+        let Some(existing) = map.get(&hash).copied() else {
+            map.insert(hash, file_id);
+            continue;
+        };
+
+        let existing_path = snapshot_path_for_id(snapshot, existing).unwrap_or("");
+        if existing_path == path {
+            // Duplicate path (unexpected); prefer the latest ID deterministically.
+            map.insert(hash, file_id);
+            continue;
+        }
+
+        map.remove(&hash);
+        collisions.insert(hash, vec![existing, file_id]);
     }
-    map
+
+    (map, collisions)
 }
 
 fn build_inode_map(snapshot: &IndexSnapshot) -> std::collections::HashMap<(u64, u64), FileId> {
@@ -347,11 +562,14 @@ fn journal_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-fn read_journal_from_offset(path: &Path, offset: u64) -> Vec<IndexUpdate> {
-    use std::io::Seek;
+fn apply_journal_from_offset<F>(path: &Path, offset: u64, mut apply: F) -> usize
+where
+    F: FnMut(IndexUpdate),
+{
+    use std::io::{BufRead, Seek};
 
     let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
+        return 0;
     };
 
     let mut reader = BufReader::new(file);
@@ -359,23 +577,35 @@ fn read_journal_from_offset(path: &Path, offset: u64) -> Vec<IndexUpdate> {
         let _ = reader.seek(std::io::SeekFrom::Start(offset));
     }
 
-    let mut updates = Vec::new();
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
+    let mut applied = 0usize;
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
             Err(e) => {
                 error!("Failed to read journal line: {}", e);
                 continue;
             }
-        };
+        }
 
-        match serde_json::from_str::<IndexUpdate>(&line) {
-            Ok(update) => updates.push(update),
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<IndexUpdate>(trimmed) {
+            Ok(update) => {
+                apply(update);
+                applied += 1;
+            }
             Err(e) => error!("Skipping invalid journal entry: {}", e),
         }
     }
 
-    updates
+    applied
 }
 
 fn truncate_journal(path: &Path) -> std::io::Result<()> {
@@ -433,15 +663,19 @@ pub fn full_rebuild_from_disk(
             let mut state = state.write().unwrap();
             let _journal_guard = journal_lock.lock().unwrap();
 
-            let updates = read_journal_from_offset(&journal_file, journal_offset);
-
             state.snapshot = snapshot;
-            state.path_to_id = build_path_map(&state.snapshot);
+            let (path_to_id, path_hash_collisions) =
+                build_path_map(&state.snapshot, &state.path_hasher);
+            state.path_to_id = path_to_id;
+            state.path_hash_collisions = path_hash_collisions;
             state.inode_to_id = build_inode_map(&state.snapshot);
             state.last_updated = now_epoch_seconds();
 
-            for update in updates {
-                state.apply_update(update);
+            let applied_updates = apply_journal_from_offset(&journal_file, journal_offset, |u| {
+                state.apply_update(u);
+            });
+            if applied_updates > 0 {
+                debug!("Applied {} journal updates after rebuild", applied_updates);
             }
 
             state.snapshot.save(&index_file)?;
@@ -625,9 +859,11 @@ impl IpcServer {
                         timestamp: vicaya_core::build_info::BUILD_INFO.timestamp.to_string(),
                         target: vicaya_core::build_info::BUILD_INFO.target.to_string(),
                     },
-                    indexed_files: state.path_to_id.len(),
+                    indexed_files: state.indexed_file_count(),
                     trigram_count: state.snapshot.trigram_index.trigram_count(),
                     arena_size: state.snapshot.string_arena.size(),
+                    index_allocated_bytes: state.estimated_index_allocated_bytes(),
+                    state_allocated_bytes: state.estimated_state_allocated_bytes(),
                     last_updated: state.last_updated,
                     reconciling: state.reconciling,
                 }

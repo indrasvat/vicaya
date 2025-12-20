@@ -33,6 +33,11 @@ impl StringArena {
     pub fn size(&self) -> usize {
         self.data.len()
     }
+
+    /// Approximate heap bytes used by the arena storage.
+    pub fn allocated_bytes(&self) -> usize {
+        self.data.capacity()
+    }
 }
 
 impl Default for StringArena {

@@ -1,6 +1,7 @@
 //! vicaya-cli: Command-line interface for vicaya.
 
 mod ipc_client;
+mod metrics;
 
 use clap::{ArgAction, Parser, Subcommand};
 use tracing::info;
@@ -60,6 +61,9 @@ enum Commands {
         format: String,
     },
 
+    /// Show runtime metrics (process, vmmap, index)
+    Metrics(metrics::MetricsArgs),
+
     /// Manage the daemon
     Daemon {
         #[command(subcommand)]
@@ -106,6 +110,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Status { format }) => {
             status(&format)?;
+        }
+        Some(Commands::Metrics(args)) => {
+            metrics::run(args)?;
         }
         Some(Commands::Daemon { action }) => {
             daemon_command(action)?;
@@ -297,6 +304,8 @@ fn status(format: &str) -> Result<()> {
             indexed_files,
             trigram_count,
             arena_size,
+            index_allocated_bytes,
+            state_allocated_bytes,
             last_updated,
             reconciling,
         } => {
@@ -317,6 +326,8 @@ fn status(format: &str) -> Result<()> {
                         "files": indexed_files,
                         "trigrams": trigram_count,
                         "arena_bytes": arena_size,
+                        "index_allocated_bytes": index_allocated_bytes,
+                        "state_allocated_bytes": state_allocated_bytes,
                         "last_updated": last_updated,
                         "reconciling": reconciling,
                     },
@@ -324,6 +335,8 @@ fn status(format: &str) -> Result<()> {
                         "bytes_per_file": if indexed_files > 0 { arena_size / indexed_files } else { 0 },
                         "trigrams_per_file": if indexed_files > 0 { trigram_count as f64 / indexed_files as f64 } else { 0.0 },
                         "arena_size_mb": arena_size as f64 / 1_048_576.0,
+                        "index_allocated_mb": index_allocated_bytes as f64 / 1_048_576.0,
+                        "state_allocated_mb": state_allocated_bytes as f64 / 1_048_576.0,
                     }
                 });
                 println!("{}", serde_json::to_string_pretty(&json).unwrap());
@@ -426,14 +439,38 @@ fn status(format: &str) -> Result<()> {
                     "│".bright_blue()
                 );
 
-                let arena_mb = arena_size as f64 / 1_048_576.0;
-                let arena_str = format!("{:.1} MB", arena_mb);
-                let plain_line = format!("    Memory usage:{:>36}", arena_str);
+                let state_mb = state_allocated_bytes as f64 / 1_048_576.0;
+                let state_str = format!("{:.1} MB", state_mb);
+                let plain_line = format!("    Memory (est):{:>36}", state_str);
                 assert_eq!(plain_line.len(), 53);
                 println!(
                     "{} {}{} {}",
                     "│".bright_blue(),
-                    "    Memory usage:".dimmed(),
+                    "    Memory (est):".dimmed(),
+                    format!("{:>36}", state_str).bright_magenta(),
+                    "│".bright_blue()
+                );
+
+                let index_mem_mb = index_allocated_bytes as f64 / 1_048_576.0;
+                let index_mem_str = format!("{:.1} MB", index_mem_mb);
+                let plain_line = format!("    Index memory:{:>36}", index_mem_str);
+                assert_eq!(plain_line.len(), 53);
+                println!(
+                    "{} {}{} {}",
+                    "│".bright_blue(),
+                    "    Index memory:".dimmed(),
+                    format!("{:>36}", index_mem_str).bright_magenta(),
+                    "│".bright_blue()
+                );
+
+                let arena_mb = arena_size as f64 / 1_048_576.0;
+                let arena_str = format!("{:.1} MB", arena_mb);
+                let plain_line = format!("    String arena:{:>36}", arena_str);
+                assert_eq!(plain_line.len(), 53);
+                println!(
+                    "{} {}{} {}",
+                    "│".bright_blue(),
+                    "    String arena:".dimmed(),
                     format!("{:>36}", arena_str).bright_magenta(),
                     "│".bright_blue()
                 );
