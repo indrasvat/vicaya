@@ -14,7 +14,7 @@ resolver = "2"
 version = "1.0.1"
 edition = "2021"
 authors = ["vicaya contributors"]
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 repository = "https://github.com/indrasvat/vicaya"
 
 [workspace.dependencies]
