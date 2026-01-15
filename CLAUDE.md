@@ -27,9 +27,10 @@ make check                    # fmt-check + lint + test
 make dev                      # Build, start daemon, launch TUI (release mode)
 make daemon-dev               # Start daemon without installing
 make tui-dev                  # Launch TUI without installing
+make build-release            # Build release binaries to ./target/release/
+make tui-local                # Run local release TUI (no global install)
 
 # Install
-make install-dev              # Install CLI only
 make install                  # Install CLI + daemon + TUI to ~/.cargo/bin
 ```
 

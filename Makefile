@@ -1,4 +1,4 @@
-.PHONY: help all build test lint fmt fmt-check check ci bench clean install-dev install daemon-start daemon-stop daemon-dev tui tui-dev run dev hooks
+.PHONY: help all build build-release test lint fmt fmt-check check ci bench clean install daemon-start daemon-stop daemon-dev tui tui-dev tui-local run dev hooks
 
 .DEFAULT_GOAL := help
 
@@ -12,9 +12,18 @@ help: ## Show this help message
 
 all: hooks ci ## Run full CI pipeline (fmt + lint + test + build)
 
-build: ## Build the workspace
-	@echo "Building workspace..."
+build: ## Build the workspace (debug)
+	@echo "Building workspace (debug)..."
 	cargo build --workspace
+
+build-release: ## Build the workspace (release) without installing
+	@echo "Building workspace (release)..."
+	cargo build --workspace --release
+	@echo ""
+	@echo "Release binaries available at:"
+	@echo "  ./target/release/vicaya"
+	@echo "  ./target/release/vicaya-daemon"
+	@echo "  ./target/release/vicaya-tui"
 
 test: ## Run all tests
 	@echo "Running tests..."
@@ -41,10 +50,6 @@ bench: ## Run benchmarks
 clean: ## Clean build artifacts
 	@echo "Cleaning target..."
 	cargo clean
-
-install-dev: ## Install vicaya CLI locally for development
-	@echo "Installing vicaya CLI locally..."
-	cargo install --path crates/vicaya-cli
 
 install: ## Install CLI, daemon, and TUI
 	@echo "Building and installing vicaya..."
@@ -102,6 +107,23 @@ tui: daemon-start ## Launch the TUI (starts daemon if needed)
 tui-dev: daemon-dev ## Launch TUI in dev mode (no install needed)
 	@echo "Launching vicaya TUI (dev mode)..."
 	@cargo run --package vicaya-tui --release
+
+tui-local: build-release ## Run local release TUI binary (no cargo run)
+	@echo "Starting daemon from local binary..."
+	@if pgrep -f vicaya-daemon > /dev/null; then \
+		echo "⚠️  Daemon already running (PID: $$(pgrep -f vicaya-daemon))"; \
+	else \
+		./target/release/vicaya-daemon & \
+		sleep 2 && \
+		if pgrep -f vicaya-daemon > /dev/null; then \
+			echo "✅ Daemon started (PID: $$(pgrep -f vicaya-daemon))"; \
+		else \
+			echo "❌ Failed to start daemon"; \
+			exit 1; \
+		fi \
+	fi
+	@echo "Launching local TUI binary..."
+	@./target/release/vicaya-tui
 
 run: install ## Install binaries, start daemon, and launch TUI
 	@echo "Starting daemon..."

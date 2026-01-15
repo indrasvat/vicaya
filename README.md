@@ -68,8 +68,9 @@ make check            # runs fmt + clippy + tests
 # Fast dev loop: build, start daemon, and launch the TUI
 make dev              # uses release binaries for realistic perf
 
-# Install the CLI only (for scripting)
-make install-dev      # cargo install --path crates/vicaya-cli
+# Build release binaries locally (no global install)
+make build-release    # binaries at ./target/release/
+make tui-local        # run local TUI binary directly
 
 # Full install (CLI + daemon + TUI in ~/.cargo/bin)
 make install
@@ -162,13 +163,14 @@ Use `VICAYA_DIR=/path/to/dir` to override the base directory (useful for tests a
 
 | Target | Description |
 | --- | --- |
-| `make build` | Compile the entire workspace (all crates). |
+| `make build` | Compile the entire workspace (debug). |
+| `make build-release` | Build release binaries to `./target/release/` without installing. |
 | `make fmt` / `make lint` / `make test` | Run rustfmt, clippy (all targets/features), or the full test suite. |
 | `make check` | Convenience combo: fmt → lint → test. |
 | `make bench` | Execute the Criterion benchmarks. |
-| `make install-dev` | `cargo install` the CLI locally for quick scripting. |
 | `make install` | Install CLI, daemon, and TUI binaries into `~/.cargo/bin`. |
 | `make dev` | Build, spawn the daemon in the background, and launch the TUI (dev workflow). |
+| `make tui-local` | Build release and run local TUI binary (no global install). |
 | `make run` | Install release binaries, start the daemon, and open the TUI (simulates end-user setup). |
 | `make daemon-start` / `make daemon-stop` | Manage the daemon using the installed CLI. |
 | `make daemon-dev` / `make tui-dev` | Run daemon or TUI straight from source without installing. |
