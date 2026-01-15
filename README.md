@@ -127,7 +127,7 @@ Highlights:
 - `Ctrl+T` opens the searchable `drishti` switcher (Patra = Files, Sthana = Directories)
 - `Enter` on a directory pushes `ksetra` scope; `h` pops scope (breadcrumbs in header)
 - `Niyama` filters in `prashna`: `type:file|dir`, `ext:rs,md`, `path:src/`, `mtime:<7d`, `size:>10mb`
-- `Ctrl+G` cycles `varga` grouping (none/dir/ext); `Ctrl+P` opens `kriya-suchi` (action palette)
+- `Ctrl+K` opens direct `ksetra` path input; `Ctrl+P` opens `kriya-suchi` (action palette)
 - `Ctrl+O` toggles `purvadarshana`; `Tab` / `Shift+Tab` cycles focus (input/results/preview)
 - Preview: scroll with `j/k`, arrows, `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `g/G`; search with `/`, jump `n/N`, toggle line numbers `Ctrl+N`, clear `Ctrl+L`
 - Actions (in `phala`): `Enter/o` open in `$EDITOR` (or enter scope on dirs), `y` copy path, `p` print path and exit, `r` reveal in file manager

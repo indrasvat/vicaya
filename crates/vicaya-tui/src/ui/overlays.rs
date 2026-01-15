@@ -29,6 +29,7 @@ pub fn render_help(f: &mut Frame) {
         "  Ctrl+P        kriya-suchi (action palette)",
         "  Ctrl+O        Toggle purvadarshana",
         "  Ctrl+G        Cycle varga grouping (none/dir/ext)",
+        "  Ctrl+K        ksetra (direct path input)",
         "  ↓ (in input)  Move to phala",
         "  ↑ (at top)    Move to prashna",
         "",
