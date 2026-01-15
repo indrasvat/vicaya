@@ -66,11 +66,18 @@ Override with `VICAYA_DIR` environment variable.
 
 ## Commit Convention
 
-Use one-liner Conventional Commits: `type(scope): summary`
+Use Conventional Commits: `type(scope): summary`
+
+**Format:**
+- One-liner: `type(scope): summary` (imperative mood, lowercase, no period)
 - Types: feat, fix, docs, style, refactor, test, chore, perf, build
 - Scopes: core, index, scanner, watcher, daemon, cli, tui
-- Keep commits atomic, brief, and relevant—one logical change per commit
-- Commit early, commit often
+
+**Granularity:**
+- Keep commits *reasonably* atomic—one logical change per commit
+- Don't be overly granular: related changes (e.g., a feature + its tests) belong together
+- A single commit can touch multiple files if they're part of one coherent change
+- Commit early, commit often, but group related work sensibly
 
 ## Testing
 
