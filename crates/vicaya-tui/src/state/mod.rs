@@ -17,6 +17,8 @@ pub enum AppMode {
     KriyaSuchi,
     /// Search within preview
     PreviewSearch,
+    /// Ksetra (scope) direct input overlay
+    KsetraInput,
     /// Confirmation dialog
     Confirm(Action),
 }
@@ -36,6 +38,8 @@ pub struct AppState {
     pub view: ViewKind,
     /// Current Ksetra (scope) stack
     pub ksetra: KsetraState,
+    /// Ksetra direct input state
+    pub ksetra_input: KsetraInputState,
     /// Search state
     pub search: SearchState,
     /// Preview state
@@ -61,6 +65,7 @@ impl AppState {
             mode: AppMode::Search,
             view: ViewKind::Patra,
             ksetra: KsetraState::new(),
+            ksetra_input: KsetraInputState::new(),
             search: SearchState::new(),
             preview: PreviewState::new(),
             ui: UiState::new(),
@@ -114,6 +119,17 @@ impl AppState {
             _ => {
                 self.ui.kriya_suchi.reset();
                 AppMode::KriyaSuchi
+            }
+        };
+    }
+
+    /// Toggle Ksetra (scope) direct input overlay.
+    pub fn toggle_ksetra_input(&mut self) {
+        self.mode = match self.mode {
+            AppMode::KsetraInput => AppMode::Search,
+            _ => {
+                self.ksetra_input.reset();
+                AppMode::KsetraInput
             }
         };
     }
@@ -456,6 +472,14 @@ impl KsetraState {
     }
 
     pub fn push(&mut self, path: PathBuf) {
+        // Don't push if same as current top (prevents rapid Enter key duplicates)
+        if self.current() == Some(&path) {
+            return;
+        }
+        // Don't push if path already exists anywhere in stack
+        if self.stack.iter().any(|p| p == &path) {
+            return;
+        }
         self.stack.push(path);
     }
 
@@ -488,6 +512,57 @@ impl KsetraState {
         }
 
         parts.join(" ▸ ")
+    }
+
+    /// Returns breadcrumbs truncated to fit within `max_width` characters.
+    /// Truncates from the left (preserving recent context) with "…" prefix.
+    /// Always preserves at least the last 2 segments when truncating.
+    pub fn breadcrumbs_truncated(&self, max_width: usize) -> String {
+        let full = self.breadcrumbs();
+        if full.len() <= max_width || max_width < 10 {
+            return full;
+        }
+
+        // Split into segments
+        let parts: Vec<&str> = full.split(" ▸ ").collect();
+        if parts.len() <= 2 {
+            // Can't truncate segments, truncate the string itself
+            let ellipsis = "…";
+            let available = max_width.saturating_sub(ellipsis.len());
+            if full.len() > available {
+                return format!("{}{}", ellipsis, &full[full.len() - available..]);
+            }
+            return full;
+        }
+
+        // Try progressively removing segments from the front
+        let separator = " ▸ ";
+        let ellipsis = "…";
+
+        for skip in 1..parts.len().saturating_sub(1) {
+            let remaining: Vec<&str> = parts[skip..].to_vec();
+            let joined = remaining.join(separator);
+            let truncated = format!("{}{}", ellipsis, joined);
+
+            if truncated.len() <= max_width {
+                return truncated;
+            }
+        }
+
+        // If still too long, show only the last segment with ellipsis
+        let last = parts.last().unwrap_or(&"");
+        let truncated = format!("{}{}", ellipsis, last);
+        if truncated.len() <= max_width {
+            return truncated;
+        }
+
+        // Absolute fallback: truncate the last segment itself
+        let available = max_width.saturating_sub(ellipsis.len());
+        if last.len() > available {
+            format!("{}{}", ellipsis, &last[last.len() - available..])
+        } else {
+            truncated
+        }
     }
 }
 
@@ -960,6 +1035,162 @@ impl Default for KriyaSuchiState {
     }
 }
 
+/// State for the ksetra (scope) direct input overlay
+pub struct KsetraInputState {
+    /// The path being typed
+    pub input: String,
+    /// Cursor position within input
+    pub cursor: usize,
+    /// Directory completions matching current input
+    pub completions: Vec<String>,
+    /// Currently selected completion index
+    pub selected_completion: usize,
+    /// Error message (e.g., "Directory not found")
+    pub error: Option<String>,
+}
+
+impl KsetraInputState {
+    pub fn new() -> Self {
+        Self {
+            input: String::new(),
+            cursor: 0,
+            completions: Vec::new(),
+            selected_completion: 0,
+            error: None,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+        self.completions.clear();
+        self.selected_completion = 0;
+        self.error = None;
+    }
+
+    /// Expand `~/` to home directory path
+    pub fn expand_path(&self) -> PathBuf {
+        let input = self.input.trim();
+        if let Some(rest) = input.strip_prefix("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                return PathBuf::from(home).join(rest);
+            }
+        }
+        PathBuf::from(input)
+    }
+
+    /// Get display version of path (with ~ for home)
+    pub fn display_path(path: &Path) -> String {
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(&home);
+            if path.starts_with(&home_path) {
+                if let Ok(rest) = path.strip_prefix(&home_path) {
+                    let rest_str = rest.display().to_string();
+                    if rest_str.is_empty() {
+                        return "~".to_string();
+                    }
+                    return format!("~/{}", rest_str);
+                }
+            }
+        }
+        path.display().to_string()
+    }
+
+    pub fn push_char(&mut self, c: char) {
+        self.input.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+        self.error = None;
+    }
+
+    pub fn pop_char(&mut self) {
+        if self.cursor > 0 {
+            // Find the previous character boundary
+            let mut new_cursor = self.cursor - 1;
+            while new_cursor > 0 && !self.input.is_char_boundary(new_cursor) {
+                new_cursor -= 1;
+            }
+            self.input.remove(new_cursor);
+            self.cursor = new_cursor;
+            self.error = None;
+        }
+    }
+
+    pub fn delete_char(&mut self) {
+        if self.cursor < self.input.len() {
+            self.input.remove(self.cursor);
+            self.error = None;
+        }
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor > 0 {
+            let mut new_cursor = self.cursor - 1;
+            while new_cursor > 0 && !self.input.is_char_boundary(new_cursor) {
+                new_cursor -= 1;
+            }
+            self.cursor = new_cursor;
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        if self.cursor < self.input.len() {
+            let mut new_cursor = self.cursor + 1;
+            while new_cursor < self.input.len() && !self.input.is_char_boundary(new_cursor) {
+                new_cursor += 1;
+            }
+            self.cursor = new_cursor;
+        }
+    }
+
+    pub fn move_cursor_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        self.cursor = self.input.len();
+    }
+
+    /// Select next completion (wraps around)
+    pub fn select_next_completion(&mut self) {
+        if !self.completions.is_empty() {
+            self.selected_completion = (self.selected_completion + 1) % self.completions.len();
+        }
+    }
+
+    /// Select previous completion (wraps around)
+    pub fn select_previous_completion(&mut self) {
+        if !self.completions.is_empty() {
+            self.selected_completion = if self.selected_completion == 0 {
+                self.completions.len().saturating_sub(1)
+            } else {
+                self.selected_completion - 1
+            };
+        }
+    }
+
+    /// Apply the currently selected completion to input
+    pub fn apply_completion(&mut self) {
+        if let Some(completion) = self.completions.get(self.selected_completion) {
+            self.input = completion.clone();
+            self.cursor = self.input.len();
+            self.completions.clear();
+            self.selected_completion = 0;
+        }
+    }
+
+    /// Set completions from search results
+    pub fn set_completions(&mut self, paths: Vec<String>) {
+        self.completions = paths;
+        self.selected_completion = 0;
+    }
+}
+
+impl Default for KsetraInputState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TextKind {
     #[default]
@@ -1181,5 +1412,71 @@ mod tests {
 
         let nums = compute_content_line_numbers(&lines);
         assert_eq!(nums, vec![None, None, Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn ksetra_push_deduplicates_same_path() {
+        let mut ksetra = KsetraState::new();
+        ksetra.push(PathBuf::from("/tmp/foo"));
+        ksetra.push(PathBuf::from("/tmp/foo")); // Should not add duplicate
+        assert_eq!(ksetra.depth(), 1);
+    }
+
+    #[test]
+    fn ksetra_push_deduplicates_existing_in_stack() {
+        let mut ksetra = KsetraState::new();
+        ksetra.push(PathBuf::from("/tmp/foo"));
+        ksetra.push(PathBuf::from("/tmp/bar"));
+        ksetra.push(PathBuf::from("/tmp/foo")); // Already in stack, should not add
+        assert_eq!(ksetra.depth(), 2);
+    }
+
+    #[test]
+    fn breadcrumbs_truncated_preserves_tail() {
+        let mut ksetra = KsetraState::new();
+        ksetra.push(PathBuf::from("/very/long/path/to/some/deep"));
+        ksetra.push(PathBuf::from("/very/long/path/to/some/deep/directory"));
+        ksetra.push(PathBuf::from(
+            "/very/long/path/to/some/deep/directory/subdir",
+        ));
+
+        let truncated = ksetra.breadcrumbs_truncated(30);
+        assert!(
+            truncated.starts_with("…"),
+            "should start with ellipsis: {}",
+            truncated
+        );
+        assert!(
+            truncated.contains("subdir"),
+            "should contain last segment: {}",
+            truncated
+        );
+    }
+
+    #[test]
+    fn breadcrumbs_truncated_returns_full_when_short() {
+        let mut ksetra = KsetraState::new();
+        ksetra.push(PathBuf::from("/tmp"));
+        assert_eq!(ksetra.breadcrumbs_truncated(100), "/tmp");
+    }
+
+    #[test]
+    fn ksetra_input_expand_path_expands_tilde() {
+        let mut input = KsetraInputState::new();
+        input.input = "~/test".to_string();
+        let expanded = input.expand_path();
+
+        if let Ok(home) = std::env::var("HOME") {
+            assert_eq!(expanded, PathBuf::from(home).join("test"));
+        }
+    }
+
+    #[test]
+    fn ksetra_input_display_path_contracts_home() {
+        if let Ok(home) = std::env::var("HOME") {
+            let path = PathBuf::from(&home).join("foo/bar");
+            let display = KsetraInputState::display_path(&path);
+            assert_eq!(display, "~/foo/bar");
+        }
     }
 }

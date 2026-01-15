@@ -11,6 +11,7 @@ pub enum KriyaId {
     TogglePreview,
     ToggleGrouping,
     PopKsetra,
+    SetKsetra,
     TogglePreviewLineNumbers,
     ClearPreviewSearch,
     Quit,
@@ -102,6 +103,15 @@ fn available_kriyas(app: &AppState) -> Vec<KriyaItem> {
             destructive: false,
         });
     }
+
+    // Always available: direct ksetra input
+    items.push(KriyaItem {
+        id: KriyaId::SetKsetra,
+        label: "Set ksetra",
+        keys: "Ctrl+K",
+        hint: "Type path directly to set scope",
+        destructive: false,
+    });
 
     items.extend([
         KriyaItem {

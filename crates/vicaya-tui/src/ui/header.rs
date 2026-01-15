@@ -16,7 +16,17 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         app.view.label(),
         app.view.english_hint()
     );
-    let ksetra = format!("ksetra: {}", app.ksetra.breadcrumbs());
+
+    // Calculate available width for ksetra breadcrumbs.
+    // Fixed elements: "vicaya" (6) + separators (4x3=12) + icons (8) + drishti (~30)
+    //                 + "ksetra: " (8) + rakshaka (~14) + suchi (~16) + borders (2)
+    // Reserve ~90 chars for non-breadcrumb elements
+    let fixed_width = 90_usize;
+    let available_for_ksetra = (area.width as usize).saturating_sub(fixed_width);
+    let ksetra_breadcrumbs = app
+        .ksetra
+        .breadcrumbs_truncated(available_for_ksetra.max(20));
+    let ksetra = format!("ksetra: {}", ksetra_breadcrumbs);
 
     let (rakshaka_text, rakshaka_color, suchi_text, reconciling) =
         if let Some(status) = &app.daemon_status {
