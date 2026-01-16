@@ -109,6 +109,15 @@ fn run_app<B: ratatui::backend::Backend>(
 
     let mut error_clear_time: Option<std::time::Instant> = None;
 
+    // Trigger initial search to populate recent files on startup
+    trigger_search(
+        &cmd_tx,
+        app,
+        &mut search_id,
+        &mut active_search_id,
+        &mut last_search_sent_at,
+    );
+
     loop {
         // Apply worker events
         while let Ok(evt) = evt_rx.try_recv() {
@@ -250,6 +259,7 @@ fn handle_key_event(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
         AppMode::DrishtiSwitcher => handle_drishti_switcher_keys(app, key, modifiers),
         AppMode::KriyaSuchi => handle_kriya_suchi_keys(app, key, modifiers),
         AppMode::PreviewSearch => handle_preview_search_keys(app, key, modifiers),
+        AppMode::KsetraInput => handle_ksetra_input_keys(app, key, modifiers),
         AppMode::Confirm(_) => handle_confirm_keys(app, key),
     }
 }
@@ -338,6 +348,11 @@ fn handle_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers)
         (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
             app.ui.grouping = app.ui.grouping.next();
             app.ui.scroll_offset = 0;
+            return;
+        }
+        // Ksetra direct input
+        (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+            app.toggle_ksetra_input();
             return;
         }
         // Help
@@ -605,6 +620,141 @@ fn handle_preview_search_keys(app: &mut AppState, key: KeyCode, modifiers: KeyMo
     }
 }
 
+/// Handle keys in ksetra input mode.
+fn handle_ksetra_input_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers) {
+    match (key, modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            app.quit();
+        }
+        (KeyCode::Esc, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+            app.toggle_ksetra_input();
+        }
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            // Validate and apply the ksetra
+            let path = app.ksetra_input.expand_path();
+            if path.is_dir() {
+                // Clear ksetra stack and set to this path
+                while app.ksetra.pop().is_some() {}
+                app.ksetra.push(path);
+                app.clear_results();
+                app.preview.clear();
+                app.toggle_ksetra_input();
+            } else {
+                app.ksetra_input.error = Some("Not a directory".to_string());
+            }
+        }
+        (KeyCode::Tab, KeyModifiers::NONE) => {
+            // Tab completion: if completions available, cycle through them
+            if app.ksetra_input.completions.is_empty() {
+                // Trigger completion search
+                trigger_ksetra_completion(app);
+            } else {
+                // Cycle to next completion and apply
+                app.ksetra_input.select_next_completion();
+                app.ksetra_input.apply_completion();
+            }
+        }
+        (KeyCode::BackTab, _) => {
+            // Shift+Tab: cycle backwards
+            if !app.ksetra_input.completions.is_empty() {
+                app.ksetra_input.select_previous_completion();
+                app.ksetra_input.apply_completion();
+            }
+        }
+        (KeyCode::Backspace, KeyModifiers::NONE) => {
+            app.ksetra_input.pop_char();
+            app.ksetra_input.completions.clear();
+        }
+        (KeyCode::Delete, KeyModifiers::NONE) => {
+            app.ksetra_input.delete_char();
+            app.ksetra_input.completions.clear();
+        }
+        (KeyCode::Left, KeyModifiers::NONE) => {
+            app.ksetra_input.move_cursor_left();
+        }
+        (KeyCode::Right, KeyModifiers::NONE) => {
+            app.ksetra_input.move_cursor_right();
+        }
+        (KeyCode::Home, KeyModifiers::NONE) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+            app.ksetra_input.move_cursor_start();
+        }
+        (KeyCode::End, KeyModifiers::NONE) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+            app.ksetra_input.move_cursor_end();
+        }
+        (KeyCode::Down, KeyModifiers::NONE) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            if !app.ksetra_input.completions.is_empty() {
+                app.ksetra_input.select_next_completion();
+            }
+        }
+        (KeyCode::Up, KeyModifiers::NONE) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            if !app.ksetra_input.completions.is_empty() {
+                app.ksetra_input.select_previous_completion();
+            }
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+            app.ksetra_input.push_char(c);
+            app.ksetra_input.completions.clear();
+        }
+        _ => {}
+    }
+}
+
+/// Trigger directory completion for ksetra input.
+fn trigger_ksetra_completion(app: &mut AppState) {
+    use crate::state::KsetraInputState;
+
+    let input = app.ksetra_input.input.trim();
+    if input.is_empty() {
+        return;
+    }
+
+    // Expand ~ to home directory for filesystem operations
+    let expanded = app.ksetra_input.expand_path();
+
+    // Find the parent directory and prefix to match
+    let (parent, prefix) = if expanded.is_dir() && input.ends_with('/') {
+        (expanded.clone(), String::new())
+    } else if let Some(parent) = expanded.parent() {
+        let prefix = expanded
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        (parent.to_path_buf(), prefix)
+    } else {
+        return;
+    };
+
+    // Read directory entries and filter
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return;
+    };
+
+    let mut completions: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .filter(|e| {
+            if prefix.is_empty() {
+                true
+            } else {
+                e.file_name()
+                    .to_str()
+                    .map(|n| n.to_lowercase().starts_with(&prefix))
+                    .unwrap_or(false)
+            }
+        })
+        .map(|e| {
+            let path = e.path();
+            // Convert back to display format (with ~)
+            KsetraInputState::display_path(&path)
+        })
+        .take(10)
+        .collect();
+
+    completions.sort();
+    app.ksetra_input.set_completions(completions);
+}
+
 fn cycle_focus_forward(app: &mut AppState) {
     let has_preview = app.preview.is_visible;
     app.search.focus = match app.search.focus {
@@ -822,6 +972,9 @@ fn run_kriya_action(app: &mut AppState, id: crate::kriya::KriyaId) {
         KriyaId::PopKsetra => {
             pop_ksetra(app);
         }
+        KriyaId::SetKsetra => {
+            app.toggle_ksetra_input();
+        }
         KriyaId::TogglePreviewLineNumbers => {
             app.preview.toggle_line_numbers();
         }
@@ -952,6 +1105,10 @@ fn ui_render(f: &mut Frame, app: &mut AppState) {
         AppMode::PreviewSearch => {
             render_search(f, app);
             ui::overlays::render_preview_search(f, app);
+        }
+        AppMode::KsetraInput => {
+            render_search(f, app);
+            ui::overlays::render_ksetra_input(f, app);
         }
         AppMode::Confirm(_) => ui::overlays::render_confirm(f, app),
     }

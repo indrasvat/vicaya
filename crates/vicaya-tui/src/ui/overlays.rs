@@ -29,6 +29,7 @@ pub fn render_help(f: &mut Frame) {
         "  Ctrl+P        kriya-suchi (action palette)",
         "  Ctrl+O        Toggle purvadarshana",
         "  Ctrl+G        Cycle varga grouping (none/dir/ext)",
+        "  Ctrl+K        ksetra (direct path input)",
         "  ↓ (in input)  Move to phala",
         "  ↑ (at top)    Move to prashna",
         "",
@@ -320,4 +321,127 @@ fn centered_fixed_rect(width: u16, height: u16, r: Rect) -> Rect {
         width,
         height,
     }
+}
+
+pub fn render_ksetra_input(f: &mut Frame, app: &AppState) {
+    use crate::state::KsetraInputState;
+    use ratatui::widgets::ListState;
+
+    let root = f.area();
+    let width = ((root.width as f32) * 0.75) as u16;
+    let width = width.clamp(50, root.width.saturating_sub(4));
+
+    // Height: input (3) + completions (up to 7) + help (2) + borders
+    let completions_count = app.ksetra_input.completions.len().min(5);
+    let height = if completions_count > 0 {
+        3 + completions_count as u16 + 2 + 3
+    } else {
+        3 + 3
+    };
+    let area = centered_fixed_rect(width, height, root);
+
+    f.render_widget(Clear, area);
+
+    // Split into: input, completions (optional), help
+    let constraints = if completions_count > 0 {
+        vec![
+            Constraint::Length(3),
+            Constraint::Length(completions_count as u16 + 2),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![Constraint::Length(3), Constraint::Length(1)]
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    // Path input
+    let input = &app.ksetra_input.input;
+    let mut input_spans = vec![
+        Span::styled("path: ", Style::default().fg(ui::ACCENT)),
+        Span::styled(input.as_str(), Style::default().fg(ui::TEXT_PRIMARY)),
+    ];
+
+    // Show error if present
+    if let Some(err) = &app.ksetra_input.error {
+        input_spans.push(Span::styled(
+            format!("  {}", err),
+            Style::default()
+                .fg(ui::ERROR)
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+
+    let input_widget = Paragraph::new(Line::from(input_spans))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ui::PRIMARY))
+                .title(" ksetra ")
+                .style(Style::default().bg(ui::BG_DARK)),
+        )
+        .style(Style::default().bg(ui::BG_DARK));
+
+    f.render_widget(input_widget, chunks[0]);
+
+    // Set cursor position
+    let cursor_x = chunks[0].x + 1 + "path: ".len() as u16 + app.ksetra_input.cursor as u16;
+    let cursor_y = chunks[0].y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
+
+    // Completions list (if any)
+    if completions_count > 0 {
+        let items: Vec<ListItem> = app
+            .ksetra_input
+            .completions
+            .iter()
+            .take(5)
+            .map(|path| {
+                let display = KsetraInputState::display_path(std::path::Path::new(path));
+                ListItem::new(Line::from(vec![Span::styled(
+                    display,
+                    Style::default().fg(ui::TEXT_PRIMARY),
+                )]))
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ui::BORDER_DIM))
+                    .title(" completions ")
+                    .style(Style::default().bg(ui::BG_DARK)),
+            )
+            .style(Style::default().bg(ui::BG_DARK))
+            .highlight_style(Style::default().bg(ui::BG_ELEVATED).fg(ui::PRIMARY))
+            .highlight_symbol("▸ ");
+
+        let mut state = ListState::default();
+        state.select(Some(
+            app.ksetra_input
+                .selected_completion
+                .min(completions_count.saturating_sub(1)),
+        ));
+        f.render_stateful_widget(list, chunks[1], &mut state);
+    }
+
+    // Help text
+    let help_chunk = if completions_count > 0 {
+        chunks[2]
+    } else {
+        chunks[1]
+    };
+    let help = Paragraph::new(Line::from(vec![Span::styled(
+        " Enter: set    Esc: cancel    Tab: complete    ~/: home",
+        Style::default()
+            .fg(ui::TEXT_SECONDARY)
+            .add_modifier(Modifier::ITALIC),
+    )]))
+    .style(Style::default().bg(ui::BG_DARK));
+
+    f.render_widget(help, help_chunk);
 }

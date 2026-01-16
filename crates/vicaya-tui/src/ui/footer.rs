@@ -13,7 +13,10 @@ use unicode_width::UnicodeWidthStr;
 use vicaya_core::build_info::BUILD_INFO;
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
+    // Priority order: discovery first, then navigation, then features (least used last)
     let mut spans = vec![
+        Span::styled("?:", Style::default().fg(ui::PRIMARY)),
+        Span::styled(" help  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Tab:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" focus  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+T:", Style::default().fg(ui::PRIMARY)),
@@ -22,10 +25,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         Span::styled(" kriya-suchi  ", Style::default().fg(ui::TEXT_SECONDARY)),
         Span::styled("Ctrl+O:", Style::default().fg(ui::PRIMARY)),
         Span::styled(" purvadarshana  ", Style::default().fg(ui::TEXT_SECONDARY)),
-        Span::styled("Ctrl+G:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" varga  ", Style::default().fg(ui::TEXT_SECONDARY)),
-        Span::styled("?:", Style::default().fg(ui::PRIMARY)),
-        Span::styled(" help  ", Style::default().fg(ui::TEXT_SECONDARY)),
+        Span::styled("Ctrl+K:", Style::default().fg(ui::PRIMARY)),
+        Span::styled(" ksetra  ", Style::default().fg(ui::TEXT_SECONDARY)),
     ];
 
     if app.search.is_results_focused() {

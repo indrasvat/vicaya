@@ -8,7 +8,7 @@ The root `Cargo.toml` drives the workspace; crates live in `crates/`. `vicaya-co
 - `make test` – run `cargo test --workspace --all-features` for unit + integration coverage.
 - `make fmt`, `make lint`, `make check` – format via `rustfmt`, lint with `clippy -D warnings`, or run the full gate (fmt + lint + test).
 - `make dev` – compile, spin up the daemon (`vicaya-daemon`), and launch the TUI in release mode.
-- `make install-dev` – install the CLI from `crates/vicaya-cli` for local dogfooding; use `make run` for the full CLI+daemon+TUI flow.
+- `make build-release` – build release binaries to `./target/release/` without global install; use `make tui-local` to run locally or `make run` for the full installed flow.
 
 ## Coding Style & Naming Conventions
 Follow standard Rust style (4-space indent, `snake_case` modules, `UpperCamelCase` types, `SCREAMING_SNAKE_CASE` consts). Always run `cargo fmt --all` before committing and keep `cargo clippy --workspace --all-targets --all-features -D warnings` clean. Document public APIs with `///` rustdoc and co-locate helpers with their call sites to keep modules compact.

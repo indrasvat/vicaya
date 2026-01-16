@@ -23,9 +23,12 @@ pub enum Request {
     Search {
         query: String,
         limit: usize,
-        /// Optional scope root (directory path) used to boost results “near” the user’s context.
+        /// Optional scope root (directory path) used to boost results "near" the user's context.
         #[serde(default)]
         scope: Option<String>,
+        /// When true and query is empty, return recent files instead of empty results.
+        #[serde(default)]
+        recent_if_empty: bool,
     },
     /// Get daemon status.
     Status,
@@ -121,11 +124,12 @@ mod tests {
             query: "test".to_string(),
             limit: 10,
             scope: None,
+            recent_if_empty: false,
         };
         let json = search.to_json().unwrap();
         let decoded: Request = Request::from_json(&json).unwrap();
         assert!(
-            matches!(decoded, Request::Search { query, limit, scope } if query == "test" && limit == 10 && scope.is_none())
+            matches!(decoded, Request::Search { query, limit, scope, recent_if_empty } if query == "test" && limit == 10 && scope.is_none() && !recent_if_empty)
         );
 
         // Test Status request

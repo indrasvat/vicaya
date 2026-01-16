@@ -305,14 +305,63 @@ impl<'a> QueryEngine<'a> {
             return 0;
         }
 
-        // Scope boost should materially improve “search from within a repo”
-        // without breaking cache demotions: it’s additive on top of the
+        // Scope boost should materially improve "search from within a repo"
+        // without breaking cache demotions: it's additive on top of the
         // existing context penalties.
         //
         // Prefer closer (shallower) matches within the scope.
         let rel_depth = path_depth.saturating_sub(scope_depth);
         let depth_penalty = (rel_depth as i32).min(20);
         (120 - depth_penalty).max(0)
+    }
+
+    /// Returns the N most recently modified files, optionally filtered by scope.
+    /// Used for populating TUI on startup when no query is provided.
+    pub fn recent_files(&self, limit: usize, scope: Option<&std::path::Path>) -> Vec<SearchResult> {
+        use std::path::Path;
+
+        // Collect entries with their mtime for sorting
+        let mut entries: Vec<(i64, SearchResult)> = self
+            .file_table
+            .iter()
+            .filter_map(|(_file_id, meta)| {
+                let path = self.string_arena.get(meta.path_offset, meta.path_len)?;
+                let name = self.string_arena.get(meta.name_offset, meta.name_len)?;
+
+                // Skip entries with empty names (e.g., root directories)
+                if name.is_empty() {
+                    return None;
+                }
+
+                // Filter by scope if provided
+                if let Some(scope_path) = scope {
+                    if !Path::new(path).starts_with(scope_path) {
+                        return None;
+                    }
+                }
+
+                Some((
+                    meta.mtime,
+                    SearchResult {
+                        path: path.to_string(),
+                        name: name.to_string(),
+                        score: 0.0, // No query match, just recency
+                        size: meta.size,
+                        mtime: meta.mtime,
+                    },
+                ))
+            })
+            .collect();
+
+        // Sort by mtime descending (most recent first)
+        entries.sort_by(|(mtime_a, _), (mtime_b, _)| mtime_b.cmp(mtime_a));
+
+        // Take top N
+        entries
+            .into_iter()
+            .take(limit)
+            .map(|(_, result)| result)
+            .collect()
     }
 }
 
@@ -462,6 +511,73 @@ mod tests {
                 "Result {} doesn't contain '5'",
                 result.name
             );
+        }
+    }
+
+    #[test]
+    fn test_recent_files_excludes_empty_names() {
+        let mut file_table = FileTable::new();
+        let mut arena = StringArena::new();
+        let index = TrigramIndex::new();
+
+        // Add a normal file
+        let (path_off1, path_len1) = arena.add("/home/user/test.txt");
+        let (name_off1, name_len1) = arena.add("test.txt");
+        let meta1 = FileMeta {
+            path_offset: path_off1,
+            path_len: path_len1,
+            name_offset: name_off1,
+            name_len: name_len1,
+            size: 1024,
+            mtime: 100,
+            dev: 0,
+            ino: 0,
+        };
+        file_table.insert(meta1);
+
+        // Add an entry with an empty name (simulating a root directory or corrupted entry)
+        let (path_off2, path_len2) = arena.add("/");
+        let (name_off2, name_len2) = arena.add("");
+        let meta2 = FileMeta {
+            path_offset: path_off2,
+            path_len: path_len2,
+            name_offset: name_off2,
+            name_len: name_len2,
+            size: 0,
+            mtime: 200, // More recent mtime
+            dev: 0,
+            ino: 0,
+        };
+        file_table.insert(meta2);
+
+        // Add another normal file
+        let (path_off3, path_len3) = arena.add("/home/user/other.rs");
+        let (name_off3, name_len3) = arena.add("other.rs");
+        let meta3 = FileMeta {
+            path_offset: path_off3,
+            path_len: path_len3,
+            name_offset: name_off3,
+            name_len: name_len3,
+            size: 2048,
+            mtime: 50,
+            dev: 0,
+            ino: 0,
+        };
+        file_table.insert(meta3);
+
+        let engine = QueryEngine::new(&file_table, &arena, &index);
+        let results = engine.recent_files(10, None);
+
+        // Should only have 2 results (the empty-name entry is filtered out)
+        assert_eq!(results.len(), 2);
+
+        // Results should be sorted by mtime desc
+        assert_eq!(results[0].name, "test.txt"); // mtime=100
+        assert_eq!(results[1].name, "other.rs"); // mtime=50
+
+        // Verify no empty names
+        for result in &results {
+            assert!(!result.name.is_empty(), "Found empty name in results");
         }
     }
 }

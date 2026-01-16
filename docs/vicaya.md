@@ -677,13 +677,17 @@ git status
 #### Makefile Targets (Rust-Oriented)
 
 ```makefile
-.PHONY: all build test lint fmt check ci bench clean install-dev
+.PHONY: all build build-release test lint fmt check ci bench clean
 
 all: ci
 
 build:
-	@echo "Building workspace..."
+	@echo "Building workspace (debug)..."
 	cargo build --workspace
+
+build-release:
+	@echo "Building workspace (release)..."
+	cargo build --workspace --release
 
 test:
 	@echo "Running tests..."
@@ -706,10 +710,6 @@ bench:
 clean:
 	@echo "Cleaning target..."
 	cargo clean
-
-install-dev:
-	@echo "Installing vicaya CLI locally..."
-	cargo install --path crates/vicaya-cli
 
 ci: fmt lint test build
 	@echo "CI pipeline complete ✅"

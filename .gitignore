@@ -29,6 +29,7 @@ hyperfine*
 # Local working documents
 TUI_IMPLEMENTATION_GUIDE.md
 .local/
+.claude/
 
 # Node.js (for semantic-release only)
 node_modules/
