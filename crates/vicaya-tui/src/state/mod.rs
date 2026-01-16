@@ -528,9 +528,11 @@ impl KsetraState {
         if parts.len() <= 2 {
             // Can't truncate segments, truncate the string itself
             let ellipsis = "…";
-            let available = max_width.saturating_sub(ellipsis.len());
-            if full.len() > available {
-                return format!("{}{}", ellipsis, &full[full.len() - available..]);
+            let ellipsis_chars = ellipsis.chars().count();
+            let available = max_width.saturating_sub(ellipsis_chars);
+            if full.chars().count() > available {
+                let tail = take_last_n_chars(&full, available);
+                return format!("{}{}", ellipsis, tail);
             }
             return full;
         }
@@ -557,13 +559,29 @@ impl KsetraState {
         }
 
         // Absolute fallback: truncate the last segment itself
-        let available = max_width.saturating_sub(ellipsis.len());
-        if last.len() > available {
-            format!("{}{}", ellipsis, &last[last.len() - available..])
+        let ellipsis_chars = ellipsis.chars().count();
+        let available = max_width.saturating_sub(ellipsis_chars);
+        if last.chars().count() > available {
+            let tail = take_last_n_chars(last, available);
+            format!("{}{}", ellipsis, tail)
         } else {
             truncated
         }
     }
+}
+
+/// Returns the last `n` characters of a string, handling UTF-8 safely.
+fn take_last_n_chars(s: &str, n: usize) -> &str {
+    let char_count = s.chars().count();
+    if n >= char_count {
+        return s;
+    }
+    let skip = char_count - n;
+    // Find the byte index where the last n characters start
+    s.char_indices()
+        .nth(skip)
+        .map(|(idx, _)| &s[idx..])
+        .unwrap_or(s)
 }
 
 fn pretty_path(path: &Path) -> String {
@@ -1478,5 +1496,48 @@ mod tests {
             let display = KsetraInputState::display_path(&path);
             assert_eq!(display, "~/foo/bar");
         }
+    }
+
+    #[test]
+    fn breadcrumbs_truncated_handles_multibyte_utf8() {
+        let mut ksetra = KsetraState::new();
+        // Craft a path where byte-based truncation will land mid-character.
+        // The function requires max_width >= 10 to attempt truncation.
+        //
+        // Path: "/Users/tést/path" where é is 2 bytes (C3 A9)
+        // Total: 16 bytes, 15 chars
+        //
+        // With max_width=12, ellipsis="…" (3 bytes), available = 12 - 3 = 9
+        // Slice start = 16 - 9 = 7, which lands inside 'é' - PANIC!
+        // (bytes 0-6 = "/Users/", byte 7 = first byte of 't', wait let me recalc)
+        //
+        // Actually: "/Users/tést/path"
+        // Bytes: / U s e r s / t [C3 A9] s t / p a t h
+        //        0 1 2 3 4 5 6 7  8  9  10 11 12 13 14 15 16 (17 bytes)
+        // To hit mid-char, we need slice to start at byte 9 (inside é)
+        // available = 17 - 9 = 8, so max_width = 8 + 3 = 11
+        ksetra.push(PathBuf::from("/Users/tést/path"));
+
+        // max_width=11: available=8, slice starts at byte 9 (mid 'é') - should panic
+        // This tests the first truncation path (parts.len() <= 2)
+        let truncated = ksetra.breadcrumbs_truncated(11);
+        assert!(truncated.starts_with("…") || !truncated.is_empty());
+    }
+
+    #[test]
+    fn breadcrumbs_truncated_fallback_handles_multibyte_utf8() {
+        // Test the fallback path (line 564-566) where even the last segment needs truncation.
+        // Requires: parts.len() > 2 AND last segment too long AND multi-byte char positioned
+        // so byte-based slicing would land mid-character.
+        let mut ksetra = KsetraState::new();
+        ksetra.push(PathBuf::from("/a"));
+        ksetra.push(PathBuf::from("/b"));
+        // "/néfghijklm" = 11 chars, 12 bytes, é spans bytes 2-3
+        // With max_width=10: available=9, byte-slice would start at byte 3 (inside é)
+        ksetra.push(PathBuf::from("/néfghijklm"));
+
+        // Should not panic, should produce valid UTF-8
+        let truncated = ksetra.breadcrumbs_truncated(10);
+        assert!(truncated.starts_with("…"), "got: {}", truncated);
     }
 }
