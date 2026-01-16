@@ -109,6 +109,15 @@ fn run_app<B: ratatui::backend::Backend>(
 
     let mut error_clear_time: Option<std::time::Instant> = None;
 
+    // Trigger initial search to populate recent files on startup
+    trigger_search(
+        &cmd_tx,
+        app,
+        &mut search_id,
+        &mut active_search_id,
+        &mut last_search_sent_at,
+    );
+
     loop {
         // Apply worker events
         while let Ok(evt) = evt_rx.try_recv() {

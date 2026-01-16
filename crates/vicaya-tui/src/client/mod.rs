@@ -34,13 +34,17 @@ impl IpcClient {
     }
 
     /// Search for files.
+    ///
+    /// If `recent_if_empty` is true and `query` is empty, returns recent files by mtime.
     pub fn search(
         &mut self,
         query: &str,
         limit: usize,
         scope: Option<&std::path::Path>,
+        recent_if_empty: bool,
     ) -> anyhow::Result<Vec<SearchResult>> {
-        if query.is_empty() {
+        // If query is empty and we don't want recent files, return early
+        if query.is_empty() && !recent_if_empty {
             return Ok(Vec::new());
         }
 
@@ -48,6 +52,7 @@ impl IpcClient {
             query: query.to_string(),
             limit,
             scope: scope.map(|p| p.to_string_lossy().to_string()),
+            recent_if_empty,
         };
 
         match self.request(&req)? {

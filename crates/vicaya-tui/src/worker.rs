@@ -145,42 +145,37 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
         }) = pending_search.take()
         {
             let trimmed = query.trim().to_string();
-            if trimmed.is_empty() {
-                let _ = evt_tx.send(WorkerEvent::SearchResults {
-                    id,
-                    results: Vec::new(),
-                    error: None,
-                });
-            } else {
-                let filter_scope = scope.as_deref();
-                let boost_scope = scope
-                    .as_ref()
-                    .cloned()
-                    .or_else(|| std::env::current_dir().ok());
-                let boost_scope = boost_scope.as_deref();
+            let filter_scope = scope.as_deref();
+            let boost_scope = scope
+                .as_ref()
+                .cloned()
+                .or_else(|| std::env::current_dir().ok());
+            let boost_scope = boost_scope.as_deref();
 
-                let mut results = match client.search(&trimmed, limit, boost_scope) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        client.reconnect();
-                        let _ = evt_tx.send(WorkerEvent::SearchResults {
-                            id,
-                            results: Vec::new(),
-                            error: Some(format!("Search error: {}", e)),
-                        });
-                        continue;
-                    }
-                };
+            // When query is empty, request recent files from daemon
+            let recent_if_empty = trimmed.is_empty();
 
-                // Scope + Niyama filtering (best-effort).
-                results.retain(|r| matches_filters(r, view, filter_scope, &niyamas));
+            let mut results = match client.search(&trimmed, limit, boost_scope, recent_if_empty) {
+                Ok(r) => r,
+                Err(e) => {
+                    client.reconnect();
+                    let _ = evt_tx.send(WorkerEvent::SearchResults {
+                        id,
+                        results: Vec::new(),
+                        error: Some(format!("Search error: {}", e)),
+                    });
+                    continue;
+                }
+            };
 
-                let _ = evt_tx.send(WorkerEvent::SearchResults {
-                    id,
-                    results,
-                    error: None,
-                });
-            }
+            // Scope + Niyama filtering (best-effort).
+            results.retain(|r| matches_filters(r, view, filter_scope, &niyamas));
+
+            let _ = evt_tx.send(WorkerEvent::SearchResults {
+                id,
+                results,
+                error: None,
+            });
         }
 
         if let Some((id, path)) = pending_preview.take() {

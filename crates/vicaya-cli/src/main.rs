@@ -154,6 +154,7 @@ fn search(query: &str, limit: usize, format: &str) -> Result<()> {
         scope: std::env::current_dir()
             .ok()
             .map(|p| p.to_string_lossy().to_string()),
+        recent_if_empty: false,
     };
 
     let response = IpcClient::connect()?.request(&request)?;

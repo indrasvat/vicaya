@@ -97,6 +97,7 @@ fn it_indexes_offline_changes_via_startup_reconcile() {
                 query: "after.txt".to_string(),
                 limit: 20,
                 scope: None,
+                recent_if_empty: false,
             },
         );
 

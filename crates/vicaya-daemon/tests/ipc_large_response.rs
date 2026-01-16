@@ -91,6 +91,7 @@ fn it_handles_large_search_responses_without_truncation() {
             query: "LargeResponseTest".to_string(),
             limit: 500,
             scope: None,
+            recent_if_empty: false,
         },
     );
 

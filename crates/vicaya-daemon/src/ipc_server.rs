@@ -818,6 +818,7 @@ impl IpcServer {
                 query,
                 limit,
                 scope,
+                recent_if_empty,
             } => {
                 let state = self.state.read().unwrap();
                 let engine = QueryEngine::new(
@@ -826,14 +827,22 @@ impl IpcServer {
                     &state.snapshot.trigram_index,
                 );
 
-                let query_obj = Query {
-                    term: query,
-                    limit,
-                    scope: scope
-                        .filter(|s| !s.trim().is_empty())
-                        .map(std::path::PathBuf::from),
+                let scope_path = scope
+                    .filter(|s| !s.trim().is_empty())
+                    .map(std::path::PathBuf::from);
+
+                // If query is empty and recent_if_empty is true, return recent files
+                let results = if query.trim().is_empty() && recent_if_empty {
+                    engine.recent_files(limit, scope_path.as_deref())
+                } else {
+                    let query_obj = Query {
+                        term: query,
+                        limit,
+                        scope: scope_path,
+                    };
+                    engine.search(&query_obj)
                 };
-                let results = engine.search(&query_obj);
+
                 let ipc_results = results
                     .into_iter()
                     .map(|r| vicaya_core::ipc::SearchResult {
