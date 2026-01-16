@@ -1,3 +1,23 @@
+# [1.1.0](https://github.com/indrasvat/vicaya/compare/v1.0.1...v1.1.0) (2026-01-16)
+
+
+### Bug Fixes
+
+* **daemon:** self-heal stale index + robust IPC ([#8](https://github.com/indrasvat/vicaya/issues/8)) ([fff601d](https://github.com/indrasvat/vicaya/commit/fff601d099527c1138bebc6cddb6a713977b019e))
+
+
+### Features
+
+* **index:** improve ranking with context + scope ([#11](https://github.com/indrasvat/vicaya/issues/11)) ([f02b4ed](https://github.com/indrasvat/vicaya/commit/f02b4ed19b43031c0cff2de1124f9e612dd05fd5))
+* **tui:** add drishti switcher + preview pane ([#9](https://github.com/indrasvat/vicaya/issues/9)) ([3bdaade](https://github.com/indrasvat/vicaya/commit/3bdaadeffba5a9c40dcf686b9d43903ddf2881a9))
+* **tui:** ksetra/niyama/varga + preview search + kriya-suchi ([#10](https://github.com/indrasvat/vicaya/issues/10)) ([0a44c11](https://github.com/indrasvat/vicaya/commit/0a44c111d31190d054a9c5a40c7fa7c5be206ebd))
+* **tui:** show recent files on startup ([#14](https://github.com/indrasvat/vicaya/issues/14)) ([2e302ca](https://github.com/indrasvat/vicaya/commit/2e302ca61e658ede64b5e6d008533488b3602471))
+
+
+### Performance Improvements
+
+* reduce daemon memory footprint and add runtime metrics ([#12](https://github.com/indrasvat/vicaya/issues/12)) ([b0f1fb6](https://github.com/indrasvat/vicaya/commit/b0f1fb6d8b19006f4a7c9e3501270d81222ec70d))
+
 # 1.0.0 (2026-01-16)
 
 
