@@ -35,6 +35,9 @@ This document captures execution-time learnings that should be applied to every 
   - the ksetra overlay hint is `Enter: set`, not `Enter: apply`
   - ksetra completion requires one `Tab` to open completions and a second `Tab` to apply the selected completion
   - Sthana directory rows render as `name/ (path)`, not `name (path)`
+- Concrete finding from Task `007`:
+  - the help overlay no longer contains `Enter / o`; use current markers actually rendered on screen, such as `Shift+Tab`, `Ctrl+P`, `Ctrl+K`, and `Ctrl+O`
+  - do not use global search-result assertions while the header still shows `reconciling…`; wait for reconcile idle first or downgrade the assertion to `UNVERIFIED`
 
 ## Screenshot and Screen-Dump Strategy
 
@@ -50,6 +53,7 @@ This document captures execution-time learnings that should be applied to every 
   - make the TUI talk to the wrong daemon
   - leave stale state that makes automation nondeterministic
 - Treat process cleanup as part of test setup, not as optional cleanup.
+- Even after branch-local daemon restart, startup reconcile can still be in progress for a noticeable window on large indexes. Visual tests that assert specific result counts or presence of global-search matches must wait for reconcile idle.
 
 ## Accessibility / OS Permissions
 
