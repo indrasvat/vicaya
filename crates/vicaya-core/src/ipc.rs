@@ -189,6 +189,12 @@ mod tests {
         assert!(
             matches!(decoded, Request::Search { query, limit, scope, filter_scope, recent_if_empty } if query == "test" && limit == 10 && scope.is_none() && filter_scope.is_none() && !recent_if_empty)
         );
+        let legacy_json =
+            r#"{"type":"search","query":"test","limit":10,"scope":null,"recent_if_empty":false}"#;
+        let decoded = Request::from_json(legacy_json).unwrap();
+        assert!(
+            matches!(decoded, Request::Search { query, limit, scope, filter_scope: None, recent_if_empty } if query == "test" && limit == 10 && scope.is_none() && !recent_if_empty)
+        );
 
         // Test Status request
         let status = Request::Status;

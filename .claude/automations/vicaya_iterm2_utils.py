@@ -251,8 +251,6 @@ def discover_fixture(
 
     safe_prefixes_lower = tuple(prefix.lower() for prefix in SAFE_NAME_PREFIXES)
     for path in all_files:
-        if not path.is_file():
-            continue
         name = path.name
         lower_name = name.lower()
         if allowed_suffixes and path.suffix.lower() in allowed_suffixes:
