@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/indrasvat/vicaya/compare/v1.1.7...v1.2.0) (2026-03-11)
+
+
+### Features
+
+* **scope:** release startup and explicit scoped search ([472fd6c](https://github.com/indrasvat/vicaya/commit/472fd6cf988b38807d8619a0399175dca5720933))
+
 ## [1.1.7](https://github.com/indrasvat/vicaya/compare/v1.1.6...v1.1.7) (2026-03-11)
 
 
