@@ -1,3 +1,10 @@
+## [1.1.7](https://github.com/indrasvat/vicaya/compare/v1.1.6...v1.1.7) (2026-03-11)
+
+
+### Bug Fixes
+
+* **watcher:** trust ordered rename pairs ([#29](https://github.com/indrasvat/vicaya/issues/29)) ([ffce4d7](https://github.com/indrasvat/vicaya/commit/ffce4d79b8673441d3de83f5227bdcc6ca7971d8))
+
 ## [1.1.6](https://github.com/indrasvat/vicaya/compare/v1.1.5...v1.1.6) (2026-03-11)
 
 
