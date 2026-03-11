@@ -17,13 +17,13 @@ That means users must launch globally and then manually narrow `ksetra`, and sco
 
 ## Files Likely In Scope
 
-- [`crates/vicaya-tui/src/main.rs`](/Users/indrasvat/code/github.com/indrasvat-vicaya/crates/vicaya-tui/src/main.rs)
-- [`crates/vicaya-tui/src/app.rs`](/Users/indrasvat/code/github.com/indrasvat-vicaya/crates/vicaya-tui/src/app.rs)
-- [`crates/vicaya-cli/src/main.rs`](/Users/indrasvat/code/github.com/indrasvat-vicaya/crates/vicaya-cli/src/main.rs)
-- [`crates/vicaya-core/src/ipc.rs`](/Users/indrasvat/code/github.com/indrasvat-vicaya/crates/vicaya-core/src/ipc.rs)
-- [`crates/vicaya-index/src/query.rs`](/Users/indrasvat/code/github.com/indrasvat-vicaya/crates/vicaya-index/src/query.rs)
-- `.claude/automations/test_vicaya_tui_startup_scope.py`
-- [`README.md`](/Users/indrasvat/code/github.com/indrasvat-vicaya/README.md)
+- [`crates/vicaya-tui/src/main.rs`](../../crates/vicaya-tui/src/main.rs)
+- [`crates/vicaya-tui/src/app.rs`](../../crates/vicaya-tui/src/app.rs)
+- [`crates/vicaya-cli/src/main.rs`](../../crates/vicaya-cli/src/main.rs)
+- [`crates/vicaya-core/src/ipc.rs`](../../crates/vicaya-core/src/ipc.rs)
+- [`crates/vicaya-index/src/query.rs`](../../crates/vicaya-index/src/query.rs)
+- [`.claude/automations/test_vicaya_tui_startup_scope.py`](../../.claude/automations/test_vicaya_tui_startup_scope.py)
+- [`README.md`](../../README.md)
 
 ## Proposed Solution
 

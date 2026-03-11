@@ -54,6 +54,14 @@ mod tests {
 
     use super::*;
 
+    struct CwdGuard(PathBuf);
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
     #[test]
     fn cli_parses_without_scope() {
         let cli = Cli::parse_from(["vicaya-tui"]);
@@ -69,8 +77,10 @@ mod tests {
 
     #[test]
     fn parse_startup_scope_resolves_relative_directory() {
+        let _lock = vicaya_core::paths::test_env_lock();
         let temp = tempfile::tempdir().unwrap();
         let old_cwd = std::env::current_dir().unwrap();
+        let _cwd_guard = CwdGuard(old_cwd);
         std::env::set_current_dir(temp.path()).unwrap();
         let expected_root = std::env::current_dir().unwrap();
 
@@ -78,8 +88,6 @@ mod tests {
         let resolved = parse_startup_scope(Some(PathBuf::from("./nested")))
             .unwrap()
             .unwrap();
-
-        std::env::set_current_dir(old_cwd).unwrap();
 
         assert_eq!(resolved, expected_root.join("nested"));
     }

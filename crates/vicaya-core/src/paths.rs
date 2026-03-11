@@ -101,6 +101,14 @@ pub fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
 mod tests {
     use super::*;
 
+    struct CwdGuard(PathBuf);
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
     #[test]
     fn expand_user_path_preserves_relative_paths() {
         assert_eq!(expand_user_path(Path::new("./foo")), PathBuf::from("./foo"));
@@ -118,15 +126,15 @@ mod tests {
 
     #[test]
     fn resolve_scope_dir_canonicalizes_relative_directories() {
+        let _lock = test_env_lock();
         let dir = tempfile::tempdir().unwrap();
         let old_cwd = std::env::current_dir().unwrap();
+        let _cwd_guard = CwdGuard(old_cwd);
         std::env::set_current_dir(dir.path()).unwrap();
         let expected_root = std::env::current_dir().unwrap();
 
         std::fs::create_dir_all("alpha/beta").unwrap();
         let resolved = resolve_scope_dir(Path::new("./alpha/../alpha/beta")).unwrap();
-
-        std::env::set_current_dir(old_cwd).unwrap();
 
         assert_eq!(resolved, expected_root.join("alpha/beta"));
     }
