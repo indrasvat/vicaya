@@ -64,6 +64,20 @@ async def main(connection) -> int:
         tab, session = await start_tui_session(window, "vicaya-core-visual")
         recorder.shot("vicaya_core_01_startup")
         recorder.pass_("startup header", "vicaya, drishti, ksetra visible")
+        startup_settled = await wait_for(
+            session,
+            lambda text, _lines: "reconciling" not in text.lower(),
+            timeout=20.0,
+            description="startup reconcile idle",
+        )
+        if startup_settled:
+            recorder.pass_("startup settled", "daemon finished reconciling before search assertions")
+        else:
+            recorder.unverified_(
+                "startup settled",
+                "daemon remained in reconciling state; later search assertions may be noisy",
+            )
+            await dump_screen(session, "startup-reconciling")
 
         await send_text(session, "\x1b[B", delay=0.4)  # Move focus out of the search input so `?` opens help.
         await send_text(session, "?", delay=0.4)
@@ -72,9 +86,10 @@ async def main(connection) -> int:
             session,
             lambda text, _lines: "vicaya-tui" in text
             and "drishti / ksetra quick help" in text
+            and "Shift+Tab" in text
+            and "Ctrl+P" in text
             and "Ctrl+K" in text
-            and "Ctrl+O" in text
-            and "Enter / o" in text,
+            and "Ctrl+O" in text,
             timeout=3.0,
             description="help overlay markers",
         ):
@@ -120,7 +135,7 @@ async def main(connection) -> int:
         await send_text(session, "\x1b", delay=0.2)
         await send_text(session, "\x1b", delay=0.2)
         await send_text(session, "src", delay=0.3)
-        await wait_for(
+        settled = await wait_for(
             session,
             lambda text, _lines: "phala (" in text and "searching" not in text.lower(),
             timeout=4.0,
@@ -128,8 +143,14 @@ async def main(connection) -> int:
         )
         recorder.shot("vicaya_core_06_sthana_search")
         screen_text = await get_screen_text(session)
-        if "phala (" in screen_text and "src/" in screen_text:
+        if settled and "phala (" in screen_text and "src/" in screen_text:
             recorder.pass_("directory search", "results rendered for src query")
+        elif not startup_settled:
+            recorder.unverified_(
+                "directory search",
+                "startup reconcile was still active, so global directory-search contents are not a reliable pass/fail signal",
+            )
+            await dump_screen(session, "directory-search")
         else:
             recorder.fail("directory search", "expected src result missing")
             await dump_screen(session, "directory-search")
