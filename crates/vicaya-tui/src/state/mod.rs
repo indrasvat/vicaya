@@ -141,6 +141,30 @@ impl Default for AppState {
     }
 }
 
+fn previous_char_boundary(text: &str, cursor: usize) -> usize {
+    if cursor == 0 {
+        return 0;
+    }
+
+    let mut new_cursor = cursor - 1;
+    while new_cursor > 0 && !text.is_char_boundary(new_cursor) {
+        new_cursor -= 1;
+    }
+    new_cursor
+}
+
+fn next_char_boundary(text: &str, cursor: usize) -> usize {
+    if cursor >= text.len() {
+        return text.len();
+    }
+
+    let mut new_cursor = cursor + 1;
+    while new_cursor < text.len() && !text.is_char_boundary(new_cursor) {
+        new_cursor += 1;
+    }
+    new_cursor
+}
+
 /// Focus target in search mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusTarget {
@@ -222,28 +246,29 @@ impl SearchState {
     /// Add character at cursor
     pub fn insert_char(&mut self, c: char) {
         self.query.insert(self.cursor_position, c);
-        self.cursor_position += 1;
+        self.cursor_position += c.len_utf8();
     }
 
     /// Remove character before cursor
     pub fn delete_char(&mut self) {
         if self.cursor_position > 0 {
-            self.query.remove(self.cursor_position - 1);
-            self.cursor_position -= 1;
+            let new_cursor = previous_char_boundary(&self.query, self.cursor_position);
+            self.query.remove(new_cursor);
+            self.cursor_position = new_cursor;
         }
     }
 
     /// Move cursor left
     pub fn move_cursor_left(&mut self) {
         if self.cursor_position > 0 {
-            self.cursor_position -= 1;
+            self.cursor_position = previous_char_boundary(&self.query, self.cursor_position);
         }
     }
 
     /// Move cursor right
     pub fn move_cursor_right(&mut self) {
         if self.cursor_position < self.query.len() {
-            self.cursor_position += 1;
+            self.cursor_position = next_char_boundary(&self.query, self.cursor_position);
         }
     }
 
@@ -1328,26 +1353,27 @@ impl PreviewState {
 
     pub fn insert_search_char(&mut self, c: char) {
         self.search_input.insert(self.search_cursor, c);
-        self.search_cursor += 1;
+        self.search_cursor += c.len_utf8();
     }
 
     pub fn delete_search_char(&mut self) {
         if self.search_cursor == 0 {
             return;
         }
-        self.search_input.remove(self.search_cursor - 1);
-        self.search_cursor -= 1;
+        let new_cursor = previous_char_boundary(&self.search_input, self.search_cursor);
+        self.search_input.remove(new_cursor);
+        self.search_cursor = new_cursor;
     }
 
     pub fn move_search_cursor_left(&mut self) {
         if self.search_cursor > 0 {
-            self.search_cursor -= 1;
+            self.search_cursor = previous_char_boundary(&self.search_input, self.search_cursor);
         }
     }
 
     pub fn move_search_cursor_right(&mut self) {
         if self.search_cursor < self.search_input.len() {
-            self.search_cursor += 1;
+            self.search_cursor = next_char_boundary(&self.search_input, self.search_cursor);
         }
     }
 }
@@ -1539,5 +1565,63 @@ mod tests {
         // Should not panic, should produce valid UTF-8
         let truncated = ksetra.breadcrumbs_truncated(10);
         assert!(truncated.starts_with("…"), "got: {}", truncated);
+    }
+
+    #[test]
+    fn search_state_handles_utf8_cursor_movement_and_delete() {
+        let mut state = SearchState::new();
+        state.insert_char('é');
+        state.insert_char('a');
+
+        assert_eq!(state.query, "éa");
+        assert_eq!(state.cursor_position, "éa".len());
+
+        state.move_cursor_left();
+        assert_eq!(state.cursor_position, 'é'.len_utf8());
+
+        state.move_cursor_left();
+        assert_eq!(state.cursor_position, 0);
+
+        state.move_cursor_right();
+        assert_eq!(state.cursor_position, 'é'.len_utf8());
+
+        state.delete_char();
+        assert_eq!(state.query, "a");
+        assert_eq!(state.cursor_position, 0);
+    }
+
+    #[test]
+    fn search_state_inserts_utf8_at_existing_cursor() {
+        let mut state = SearchState::new();
+        state.set_query("ab".to_string());
+        state.move_cursor_left();
+        state.insert_char('é');
+
+        assert_eq!(state.query, "aéb");
+        assert_eq!(state.cursor_position, "aé".len());
+    }
+
+    #[test]
+    fn preview_search_handles_utf8_cursor_movement_and_delete() {
+        let mut preview = PreviewState::new();
+        preview.start_search();
+        preview.insert_search_char('é');
+        preview.insert_search_char('a');
+
+        assert_eq!(preview.search_input, "éa");
+        assert_eq!(preview.search_cursor, "éa".len());
+
+        preview.move_search_cursor_left();
+        assert_eq!(preview.search_cursor, 'é'.len_utf8());
+
+        preview.move_search_cursor_left();
+        assert_eq!(preview.search_cursor, 0);
+
+        preview.move_search_cursor_right();
+        assert_eq!(preview.search_cursor, 'é'.len_utf8());
+
+        preview.delete_search_char();
+        assert_eq!(preview.search_input, "a");
+        assert_eq!(preview.search_cursor, 0);
     }
 }
