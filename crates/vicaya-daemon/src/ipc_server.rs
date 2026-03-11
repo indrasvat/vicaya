@@ -502,112 +502,6 @@ fn hash_map_allocated_bytes<K, V>(map: &std::collections::HashMap<K, V>) -> usiz
     map.capacity() * std::mem::size_of::<(K, V)>() + map.capacity()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-    use vicaya_core::config::PerformanceConfig;
-    use vicaya_scanner::Scanner;
-
-    fn test_config(root: &Path, vicaya_dir: &Path) -> Config {
-        Config {
-            index_roots: vec![root.to_path_buf()],
-            exclusions: vec![],
-            index_path: vicaya_dir.join("index"),
-            max_memory_mb: 128,
-            performance: PerformanceConfig {
-                scanner_threads: 2,
-                reconcile_hour: 3,
-            },
-        }
-    }
-
-    fn build_state(root: &Path, vicaya_dir: &Path) -> DaemonState {
-        let config = test_config(root, vicaya_dir);
-        std::fs::create_dir_all(&config.index_path).unwrap();
-        let snapshot = Scanner::new(config.clone()).scan().unwrap();
-        DaemonState::new(
-            config,
-            vicaya_dir.join("index.bin"),
-            vicaya_dir.join("journal.log"),
-            snapshot,
-        )
-    }
-
-    fn inode_key_for(state: &DaemonState, file_id: FileId) -> (u64, u64) {
-        let meta = state.snapshot.file_table.get(file_id).unwrap();
-        (meta.dev, meta.ino)
-    }
-
-    #[test]
-    fn move_path_updates_maps_for_plain_rename() {
-        let vicaya_dir = tempdir().unwrap();
-        let root = tempdir().unwrap();
-
-        let from = root.path().join("from.txt");
-        let to = root.path().join("renamed.txt");
-        std::fs::write(&from, "from").unwrap();
-
-        let mut state = build_state(root.path(), vicaya_dir.path());
-        let file_id = state.get_file_id_for_path(&from.to_string_lossy()).unwrap();
-
-        std::fs::rename(&from, &to).unwrap();
-        state.move_path(&from, &to);
-
-        assert!(state
-            .get_file_id_for_path(&from.to_string_lossy())
-            .is_none());
-        assert_eq!(
-            state.get_file_id_for_path(&to.to_string_lossy()),
-            Some(file_id)
-        );
-        assert_eq!(
-            snapshot_path_for_id(&state.snapshot, file_id),
-            Some(to.to_string_lossy().as_ref())
-        );
-        assert_eq!(
-            state.inode_to_id.get(&inode_key_for(&state, file_id)),
-            Some(&file_id)
-        );
-    }
-
-    #[test]
-    fn move_path_tombstones_overwritten_destination_and_clears_inode_mapping() {
-        let vicaya_dir = tempdir().unwrap();
-        let root = tempdir().unwrap();
-
-        let from = root.path().join("from.txt");
-        let to = root.path().join("to.txt");
-        std::fs::write(&from, "from").unwrap();
-        std::fs::write(&to, "to").unwrap();
-
-        let mut state = build_state(root.path(), vicaya_dir.path());
-        let from_id = state.get_file_id_for_path(&from.to_string_lossy()).unwrap();
-        let overwritten_id = state.get_file_id_for_path(&to.to_string_lossy()).unwrap();
-        let overwritten_inode = inode_key_for(&state, overwritten_id);
-
-        std::fs::rename(&from, &to).unwrap();
-        state.move_path(&from, &to);
-
-        assert!(state
-            .get_file_id_for_path(&from.to_string_lossy())
-            .is_none());
-        assert_eq!(
-            state.get_file_id_for_path(&to.to_string_lossy()),
-            Some(from_id)
-        );
-        assert_eq!(state.inode_to_id.get(&overwritten_inode), None);
-
-        let tombstoned = state.snapshot.file_table.get(overwritten_id).unwrap();
-        assert_eq!(tombstoned.path_len, 0);
-        assert_eq!(tombstoned.name_len, 0);
-        assert!(
-            !state.inode_to_id.values().any(|&id| id == overwritten_id),
-            "overwritten destination should not survive in inode map"
-        );
-    }
-}
-
 fn snapshot_path_for_id(snapshot: &IndexSnapshot, file_id: FileId) -> Option<&str> {
     let meta = snapshot.file_table.get(file_id)?;
     snapshot.string_arena.get(meta.path_offset, meta.path_len)
@@ -1048,5 +942,111 @@ impl IpcServer {
 impl Drop for IpcServer {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use vicaya_core::config::PerformanceConfig;
+    use vicaya_scanner::Scanner;
+
+    fn test_config(root: &Path, vicaya_dir: &Path) -> Config {
+        Config {
+            index_roots: vec![root.to_path_buf()],
+            exclusions: vec![],
+            index_path: vicaya_dir.join("index"),
+            max_memory_mb: 128,
+            performance: PerformanceConfig {
+                scanner_threads: 2,
+                reconcile_hour: 3,
+            },
+        }
+    }
+
+    fn build_state(root: &Path, vicaya_dir: &Path) -> DaemonState {
+        let config = test_config(root, vicaya_dir);
+        std::fs::create_dir_all(&config.index_path).unwrap();
+        let snapshot = Scanner::new(config.clone()).scan().unwrap();
+        DaemonState::new(
+            config,
+            vicaya_dir.join("index.bin"),
+            vicaya_dir.join("journal.log"),
+            snapshot,
+        )
+    }
+
+    fn inode_key_for(state: &DaemonState, file_id: FileId) -> (u64, u64) {
+        let meta = state.snapshot.file_table.get(file_id).unwrap();
+        (meta.dev, meta.ino)
+    }
+
+    #[test]
+    fn move_path_updates_maps_for_plain_rename() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+
+        let from = root.path().join("from.txt");
+        let to = root.path().join("renamed.txt");
+        std::fs::write(&from, "from").unwrap();
+
+        let mut state = build_state(root.path(), vicaya_dir.path());
+        let file_id = state.get_file_id_for_path(&from.to_string_lossy()).unwrap();
+
+        std::fs::rename(&from, &to).unwrap();
+        state.move_path(&from, &to);
+
+        assert!(state
+            .get_file_id_for_path(&from.to_string_lossy())
+            .is_none());
+        assert_eq!(
+            state.get_file_id_for_path(&to.to_string_lossy()),
+            Some(file_id)
+        );
+        assert_eq!(
+            snapshot_path_for_id(&state.snapshot, file_id),
+            Some(to.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            state.inode_to_id.get(&inode_key_for(&state, file_id)),
+            Some(&file_id)
+        );
+    }
+
+    #[test]
+    fn move_path_tombstones_overwritten_destination_and_clears_inode_mapping() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+
+        let from = root.path().join("from.txt");
+        let to = root.path().join("to.txt");
+        std::fs::write(&from, "from").unwrap();
+        std::fs::write(&to, "to").unwrap();
+
+        let mut state = build_state(root.path(), vicaya_dir.path());
+        let from_id = state.get_file_id_for_path(&from.to_string_lossy()).unwrap();
+        let overwritten_id = state.get_file_id_for_path(&to.to_string_lossy()).unwrap();
+        let overwritten_inode = inode_key_for(&state, overwritten_id);
+
+        std::fs::rename(&from, &to).unwrap();
+        state.move_path(&from, &to);
+
+        assert!(state
+            .get_file_id_for_path(&from.to_string_lossy())
+            .is_none());
+        assert_eq!(
+            state.get_file_id_for_path(&to.to_string_lossy()),
+            Some(from_id)
+        );
+        assert_eq!(state.inode_to_id.get(&overwritten_inode), None);
+
+        let tombstoned = state.snapshot.file_table.get(overwritten_id).unwrap();
+        assert_eq!(tombstoned.path_len, 0);
+        assert_eq!(tombstoned.name_len, 0);
+        assert!(
+            !state.inode_to_id.values().any(|&id| id == overwritten_id),
+            "overwritten destination should not survive in inode map"
+        );
     }
 }
