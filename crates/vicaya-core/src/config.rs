@@ -34,16 +34,16 @@ pub struct PerformanceConfig {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
+        let mut config = Self {
             index_roots: vec![PathBuf::from(
                 std::env::var("HOME").unwrap_or_else(|_| "/".to_string()),
             )],
             exclusions: vec![
-                "/System".to_string(),
-                "/Library".to_string(),
-                "/.git".to_string(),
-                "/node_modules".to_string(),
-                "/target".to_string(),
+                "System".to_string(),
+                "Library".to_string(),
+                ".git".to_string(),
+                "node_modules".to_string(),
+                "target".to_string(),
             ],
             index_path: Self::default_index_path(),
             max_memory_mb: 512,
@@ -51,7 +51,9 @@ impl Default for Config {
                 scanner_threads: num_cpus::get(),
                 reconcile_hour: 3,
             },
-        }
+        };
+        config.normalize_exclusions();
+        config
     }
 }
 
@@ -64,6 +66,7 @@ impl Config {
 
         // Expand tilde (~) and environment variables in paths using shellexpand
         config.expand_paths();
+        config.normalize_exclusions();
 
         Ok(config)
     }
@@ -79,6 +82,14 @@ impl Config {
 
         // Expand in index_path
         self.index_path = Self::expand_path(&self.index_path);
+    }
+
+    fn normalize_exclusions(&mut self) {
+        self.exclusions = self
+            .exclusions
+            .iter()
+            .map(|exclusion| crate::filter::normalize_exclusion(exclusion).to_string())
+            .collect();
     }
 
     /// Expand tilde and environment variables in a single path.
@@ -199,6 +210,7 @@ reconcile_hour = 3
 
         assert!(!config.index_roots.is_empty());
         assert!(!config.exclusions.is_empty());
+        assert!(config.exclusions.iter().all(|ex| !ex.starts_with('/')));
         assert_eq!(config.max_memory_mb, 512);
         assert_eq!(config.performance.reconcile_hour, 3);
     }
@@ -239,5 +251,29 @@ reconcile_hour = 3
             loaded_config.performance.reconcile_hour,
             config.performance.reconcile_hour
         );
+    }
+
+    #[test]
+    fn test_load_normalizes_leading_slash_exclusions() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let config_content = r#"
+index_roots = ["~"]
+exclusions = ["/target", "/node_modules", "/*.log"]
+index_path = "~/Library/Application Support/vicaya"
+max_memory_mb = 512
+
+[performance]
+scanner_threads = 4
+reconcile_hour = 3
+"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(config_content.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(config.exclusions, vec!["target", "node_modules", "*.log"]);
     }
 }

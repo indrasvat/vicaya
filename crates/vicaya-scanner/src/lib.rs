@@ -303,6 +303,26 @@ mod tests {
     }
 
     #[test]
+    fn test_should_index_leading_slash_exclusions() {
+        let scanner = make_scanner(vec!["/target".to_string(), "/node_modules".to_string()]);
+
+        assert!(!scanner.should_index(Path::new("/rust/project/target/debug/app")));
+        assert!(!scanner.should_index(Path::new(
+            "/home/user/project/node_modules/package/index.js"
+        )));
+        assert!(scanner.should_index(Path::new("/home/user/project/src/main.rs")));
+    }
+
+    #[test]
+    fn test_should_index_leading_slash_globs() {
+        let scanner = make_scanner(vec!["/*.log".to_string(), "/._*".to_string()]);
+
+        assert!(!scanner.should_index(Path::new("/var/log/app.log")));
+        assert!(!scanner.should_index(Path::new("/Users/test/._secret")));
+        assert!(scanner.should_index(Path::new("/Users/test/app.rs")));
+    }
+
+    #[test]
     fn test_should_index_multiple_exclusions() {
         let scanner = make_scanner(vec![
             ".git".to_string(),
