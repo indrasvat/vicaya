@@ -1,3 +1,10 @@
+## [1.1.3](https://github.com/indrasvat/vicaya/compare/v1.1.2...v1.1.3) (2026-03-11)
+
+
+### Bug Fixes
+
+* **daemon:** clean overwritten move targets ([#25](https://github.com/indrasvat/vicaya/issues/25)) ([5c7efb2](https://github.com/indrasvat/vicaya/commit/5c7efb2e093b4e048199261dd8414737af82754c))
+
 ## [1.1.2](https://github.com/indrasvat/vicaya/compare/v1.1.1...v1.1.2) (2026-03-11)
 
 
