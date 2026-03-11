@@ -1,3 +1,10 @@
+## [1.1.5](https://github.com/indrasvat/vicaya/compare/v1.1.4...v1.1.5) (2026-03-11)
+
+
+### Bug Fixes
+
+* **config:** normalize exclusion patterns ([#27](https://github.com/indrasvat/vicaya/issues/27)) ([e6ce8f9](https://github.com/indrasvat/vicaya/commit/e6ce8f985b45be39455e244f995e9a1e0e40c7f4))
+
 ## [1.1.4](https://github.com/indrasvat/vicaya/compare/v1.1.3...v1.1.4) (2026-03-11)
 
 
