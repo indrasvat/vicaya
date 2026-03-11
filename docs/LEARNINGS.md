@@ -71,3 +71,8 @@ This document captures execution-time learnings that should be applied to every 
   3. clean resident `vicaya` processes
   4. verify versions
   5. only then run iTerm2 automation
+- PR merge gate:
+  1. wait for CI to finish
+  2. wait for Codex review to settle as well
+  3. only merge after Codex has either reduced to a `👍`/non-actionable settled state or after any real Codex comments have been fixed and resolved
+  4. do not treat "green CI + no current threads" as sufficient if Codex is still actively reviewing
