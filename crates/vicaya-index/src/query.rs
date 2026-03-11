@@ -187,10 +187,6 @@ impl<'a> QueryEngine<'a> {
         const MAX_EMPTY_SCAN: usize = 1000;
 
         for (scanned, (file_id, _meta)) in self.file_table.iter().enumerate() {
-            if ranked.len() >= limit {
-                break;
-            }
-
             // Early termination for non-matching queries
             if ranked.is_empty() && scanned >= MAX_EMPTY_SCAN {
                 break;
@@ -202,6 +198,7 @@ impl<'a> QueryEngine<'a> {
         }
 
         self.sort_ranked_results(&mut ranked);
+        ranked.truncate(limit);
         ranked.into_iter().map(|(r, _)| r).collect()
     }
 
@@ -512,6 +509,50 @@ mod tests {
                 result.name
             );
         }
+    }
+
+    #[test]
+    fn test_short_queries_rank_best_matches_not_first_matches() {
+        let mut file_table = FileTable::new();
+        let mut arena = StringArena::new();
+        let mut index = TrigramIndex::new();
+
+        for name in [
+            "base.txt",
+            "case-study.txt",
+            "search.rs",
+            "server.rs",
+            "session.rs",
+        ] {
+            let path = format!("/repo/{name}");
+            let (path_off, path_len) = arena.add(&path);
+            let (name_off, name_len) = arena.add(name);
+
+            let meta = FileMeta {
+                path_offset: path_off,
+                path_len,
+                name_offset: name_off,
+                name_len,
+                size: 1024,
+                mtime: 0,
+                dev: 0,
+                ino: 0,
+            };
+
+            let file_id = file_table.insert(meta);
+            index.add(file_id, name);
+        }
+
+        let engine = QueryEngine::new(&file_table, &arena, &index);
+        let query = Query {
+            term: "se".to_string(),
+            limit: 2,
+            scope: None,
+        };
+
+        let results = engine.search(&query);
+        let names: Vec<_> = results.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["search.rs", "server.rs"]);
     }
 
     #[test]
