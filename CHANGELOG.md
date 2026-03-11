@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/indrasvat/vicaya/compare/v1.1.1...v1.1.2) (2026-03-11)
+
+
+### Bug Fixes
+
+* **ipc:** bound daemon message reads ([#24](https://github.com/indrasvat/vicaya/issues/24)) ([aeaad97](https://github.com/indrasvat/vicaya/commit/aeaad97a18c7c08db4a89511991aae36c08277fd))
+
 ## [1.1.1](https://github.com/indrasvat/vicaya/compare/v1.1.0...v1.1.1) (2026-03-11)
 
 
