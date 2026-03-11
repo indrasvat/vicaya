@@ -1224,6 +1224,7 @@ fn bench_metrics(args: MetricsBenchArgs) -> Result<()> {
             scope: std::env::current_dir()
                 .ok()
                 .map(|p| p.to_string_lossy().to_string()),
+            filter_scope: None,
             recent_if_empty: false,
         };
         if let Ok(mut client_ipc) = IpcClient::connect() {
@@ -1243,6 +1244,7 @@ fn bench_metrics(args: MetricsBenchArgs) -> Result<()> {
             scope: std::env::current_dir()
                 .ok()
                 .map(|p| p.to_string_lossy().to_string()),
+            filter_scope: None,
             recent_if_empty: false,
         };
 

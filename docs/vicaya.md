@@ -216,7 +216,15 @@ RANK  SCORE  MODIFIED            PATH
 1     0.98   2025-11-20 10:21    /Users/alice/projects/vicaya/src/main.rs
 2     0.91   2025-10-02 19:05    /Users/alice/projects/app/src/main.rs
 3     0.76   2024-07-11 08:09    /Users/alice/archive/rust-demo/src/main.rs
+
+$ vicaya search "query.rs" --scope ~/code/github.com/example-repo --limit 5
+RANK  SCORE  MODIFIED            PATH
+1     1.00   2026-03-11 10:21    /Users/alice/code/github.com/example-repo/src/query.rs
 ```
+
+The shipped CLI now supports explicit subtree restriction via `--scope <DIR>`,
+while the TUI can be launched directly into a scope with `vicaya-tui .` or
+`vicaya-tui /some/dir`.
 
 ### State Transitions (High-Level)
 

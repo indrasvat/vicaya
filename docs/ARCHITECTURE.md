@@ -273,7 +273,7 @@ and search focused on filenames.
 ### Search Algorithm
 
 ```
-Input: query string, result limit, optional scope directory
+Input: query string, result limit, optional boost scope, optional filter scope
 
                     ┌──────────────┐
                     │ query.len()  │
@@ -337,10 +337,18 @@ When primary scores are equal, tie-breaking uses (in order):
 | `.git/` | -40 | Git internals |
 | `.idea/`, `.vscode/` | -20 | IDE configuration |
 
-### Scope Boost
+### Scope Handling
 
-When a scope directory is active, files within it receive a bonus of up to
-+120 points, decreasing with relative depth.
+vicaya keeps two distinct scope concepts:
+
+- **Boost scope**: ranking context only; in-scope files receive up to `+120`
+  points, decreasing with relative depth
+- **Filter scope**: hard subtree restriction; out-of-scope files are excluded
+  before ranking and before result limiting
+
+This split lets the CLI and TUI preserve their current "search near me"
+behavior while also supporting explicit subtree-restricted searches such as
+`vicaya search "query.rs" --scope ~/code/github.com/example-repo`.
 
 ---
 
@@ -455,7 +463,7 @@ Communication uses newline-delimited JSON over a Unix domain socket
 
 | Variant | Fields | Purpose |
 |---|---|---|
-| `Search` | query, limit, scope, recent_if_empty | Execute search or return recent files |
+| `Search` | query, limit, scope, filter_scope, recent_if_empty | Execute search or return recent files |
 | `Status` | — | Get daemon statistics |
 | `Rebuild` | dry_run | Trigger full index rebuild |
 | `Shutdown` | — | Graceful daemon shutdown |
@@ -615,7 +623,7 @@ ones in the burst are discarded.
 The worker thread handles all I/O off the main thread:
 
 **Commands** (main → worker):
-- `Search { id, query, limit, view, scope, niyamas }` — Execute search via daemon IPC
+- `Search { id, query, limit, view, boost_scope, filter_scope, niyamas }` — Execute search via daemon IPC
 - `Preview { id, path }` — Load and syntax-highlight file preview
 - `Quit` — Shut down worker
 

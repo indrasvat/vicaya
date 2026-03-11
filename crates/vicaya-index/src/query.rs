@@ -13,6 +13,8 @@ pub struct Query {
     pub limit: usize,
     /// Optional scope root to boost (directory path).
     pub scope: Option<std::path::PathBuf>,
+    /// Optional scope root used to strictly filter results to a subtree.
+    pub filter_scope: Option<std::path::PathBuf>,
 }
 
 /// A search result.
@@ -60,12 +62,19 @@ impl<'a> QueryEngine<'a> {
     /// Execute a search query.
     pub fn search(&self, query: &Query) -> Vec<SearchResult> {
         let normalized = query.term.to_lowercase();
-        let scope = query.scope.as_deref();
-        let scope_depth = scope.map(|s| s.components().count());
+        let boost_scope = query.scope.as_deref();
+        let boost_scope_depth = boost_scope.map(|s| s.components().count());
+        let filter_scope = query.filter_scope.as_deref();
 
         // For short queries, do a linear scan
         if normalized.len() < 3 {
-            return self.linear_search(&normalized, scope, scope_depth, query.limit);
+            return self.linear_search(
+                &normalized,
+                boost_scope,
+                boost_scope_depth,
+                filter_scope,
+                query.limit,
+            );
         }
 
         // Extract trigrams and query the index
@@ -75,7 +84,15 @@ impl<'a> QueryEngine<'a> {
         // Score and filter candidates
         let mut ranked: Vec<(SearchResult, RankFeatures)> = candidates
             .iter()
-            .filter_map(|&file_id| self.score_candidate(file_id, &normalized, scope, scope_depth))
+            .filter_map(|&file_id| {
+                self.score_candidate(
+                    file_id,
+                    &normalized,
+                    boost_scope,
+                    boost_scope_depth,
+                    filter_scope,
+                )
+            })
             .collect();
 
         self.sort_ranked_results(&mut ranked);
@@ -90,13 +107,21 @@ impl<'a> QueryEngine<'a> {
         &self,
         file_id: FileId,
         query: &str,
-        scope: Option<&std::path::Path>,
-        scope_depth: Option<usize>,
+        boost_scope: Option<&std::path::Path>,
+        boost_scope_depth: Option<usize>,
+        filter_scope: Option<&std::path::Path>,
     ) -> Option<(SearchResult, RankFeatures)> {
         let meta = self.file_table.get(file_id)?;
 
         let path = self.string_arena.get(meta.path_offset, meta.path_len)?;
         let name = self.string_arena.get(meta.name_offset, meta.name_len)?;
+        let path_buf = std::path::Path::new(path);
+
+        if let Some(filter_scope) = filter_scope {
+            if !path_buf.starts_with(filter_scope) {
+                return None;
+            }
+        }
 
         // Check if the query matches the basename or path
         let name_lower = name.to_lowercase();
@@ -128,7 +153,7 @@ impl<'a> QueryEngine<'a> {
         let path_depth = Self::path_depth(path);
         let features = RankFeatures {
             context_score: Self::context_score(&path_lower)
-                + Self::scope_boost(path, path_depth, scope, scope_depth),
+                + Self::scope_boost(path, path_depth, boost_scope, boost_scope_depth),
             path_depth,
         };
 
@@ -177,8 +202,9 @@ impl<'a> QueryEngine<'a> {
     fn linear_search(
         &self,
         query: &str,
-        scope: Option<&std::path::Path>,
-        scope_depth: Option<usize>,
+        boost_scope: Option<&std::path::Path>,
+        boost_scope_depth: Option<usize>,
+        filter_scope: Option<&std::path::Path>,
         limit: usize,
     ) -> Vec<SearchResult> {
         if limit == 0 {
@@ -196,7 +222,9 @@ impl<'a> QueryEngine<'a> {
                 break;
             }
 
-            if let Some(result) = self.score_candidate(file_id, query, scope, scope_depth) {
+            if let Some(result) =
+                self.score_candidate(file_id, query, boost_scope, boost_scope_depth, filter_scope)
+            {
                 self.push_ranked_candidate(&mut ranked, result, limit);
             }
         }
@@ -344,7 +372,11 @@ impl<'a> QueryEngine<'a> {
 
     /// Returns the N most recently modified files, optionally filtered by scope.
     /// Used for populating TUI on startup when no query is provided.
-    pub fn recent_files(&self, limit: usize, scope: Option<&std::path::Path>) -> Vec<SearchResult> {
+    pub fn recent_files(
+        &self,
+        limit: usize,
+        filter_scope: Option<&std::path::Path>,
+    ) -> Vec<SearchResult> {
         use std::path::Path;
 
         // Collect entries with their mtime for sorting
@@ -361,7 +393,7 @@ impl<'a> QueryEngine<'a> {
                 }
 
                 // Filter by scope if provided
-                if let Some(scope_path) = scope {
+                if let Some(scope_path) = filter_scope {
                     if !Path::new(path).starts_with(scope_path) {
                         return None;
                     }
@@ -426,6 +458,7 @@ mod tests {
             term: "test".to_string(),
             limit: 10,
             scope: None,
+            filter_scope: None,
         };
 
         let results = engine.search(&query);
@@ -469,6 +502,7 @@ mod tests {
             term: "*".to_string(),
             limit: 100,
             scope: None,
+            filter_scope: None,
         };
 
         let start = std::time::Instant::now();
@@ -524,6 +558,7 @@ mod tests {
             term: "5".to_string(),
             limit: 50,
             scope: None,
+            filter_scope: None,
         };
 
         let results = engine.search(&query);
@@ -578,6 +613,7 @@ mod tests {
             term: "se".to_string(),
             limit: 2,
             scope: None,
+            filter_scope: None,
         };
 
         let results = engine.search(&query);
@@ -650,5 +686,76 @@ mod tests {
         for result in &results {
             assert!(!result.name.is_empty(), "Found empty name in results");
         }
+    }
+
+    #[test]
+    fn test_filter_scope_excludes_out_of_scope_exact_matches() {
+        let mut file_table = FileTable::new();
+        let mut arena = StringArena::new();
+        let mut index = TrigramIndex::new();
+
+        for path in ["/repo-a/query.rs", "/repo-b/query.rs"] {
+            let name = "query.rs";
+            let (path_off, path_len) = arena.add(path);
+            let (name_off, name_len) = arena.add(name);
+            let meta = FileMeta {
+                path_offset: path_off,
+                path_len,
+                name_offset: name_off,
+                name_len,
+                size: 128,
+                mtime: 0,
+                dev: 0,
+                ino: 0,
+            };
+            let file_id = file_table.insert(meta);
+            index.add(file_id, name);
+        }
+
+        let engine = QueryEngine::new(&file_table, &arena, &index);
+        let query = Query {
+            term: "query.rs".to_string(),
+            limit: 10,
+            scope: Some(std::path::PathBuf::from("/repo-a")),
+            filter_scope: Some(std::path::PathBuf::from("/repo-a")),
+        };
+
+        let results = engine.search(&query);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "/repo-a/query.rs");
+    }
+
+    #[test]
+    fn test_recent_files_respects_filter_scope() {
+        let mut file_table = FileTable::new();
+        let mut arena = StringArena::new();
+        let index = TrigramIndex::new();
+
+        for (path, name, mtime) in [
+            ("/repo-a/new.rs", "new.rs", 300),
+            ("/repo-b/other.rs", "other.rs", 200),
+            ("/repo-a/older.rs", "older.rs", 100),
+        ] {
+            let (path_off, path_len) = arena.add(path);
+            let (name_off, name_len) = arena.add(name);
+            let meta = FileMeta {
+                path_offset: path_off,
+                path_len,
+                name_offset: name_off,
+                name_len,
+                size: 1,
+                mtime,
+                dev: 0,
+                ino: 0,
+            };
+            file_table.insert(meta);
+        }
+
+        let engine = QueryEngine::new(&file_table, &arena, &index);
+        let results = engine.recent_files(10, Some(std::path::Path::new("/repo-a")));
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].path, "/repo-a/new.rs");
+        assert_eq!(results[1].path, "/repo-a/older.rs");
     }
 }

@@ -112,6 +112,7 @@ fn it_indexes_offline_changes_via_startup_reconcile() {
                 query: "after.txt".to_string(),
                 limit: 20,
                 scope: None,
+                filter_scope: None,
                 recent_if_empty: false,
             },
         );
@@ -196,6 +197,7 @@ fn it_replays_journal_when_starting_from_existing_index() {
             query: "after.txt".to_string(),
             limit: 20,
             scope: None,
+            filter_scope: None,
             recent_if_empty: false,
         },
     );
@@ -270,6 +272,7 @@ fn it_discards_stale_journal_when_starting_from_fresh_build() {
             query: "live.txt".to_string(),
             limit: 20,
             scope: None,
+            filter_scope: None,
             recent_if_empty: false,
         },
     );

@@ -88,6 +88,7 @@ vicaya rebuild
 
 # Search for files
 vicaya search "main.rs" --limit 10
+vicaya search "query.rs" --scope ~/code/github.com/example-repo --limit 10
 
 # Check daemon/index status
 vicaya status
@@ -126,6 +127,7 @@ Highlights:
 - Split view: `phala` (results) + `purvadarshana` (preview with syntax highlighting)
 - `Ctrl+T` opens the searchable `drishti` switcher (Patra = Files, Sthana = Directories)
 - `Enter` on a directory pushes `ksetra` scope; `h` pops scope (breadcrumbs in header)
+- Launch with `vicaya-tui .` or `vicaya-tui /some/dir` to start with `ksetra` already applied
 - `Niyama` filters in `prashna`: `type:file|dir`, `ext:rs,md`, `path:src/`, `mtime:<7d`, `size:>10mb`
 - `Ctrl+K` opens direct `ksetra` path input; `Ctrl+P` opens `kriya-suchi` (action palette)
 - `Ctrl+O` toggles `purvadarshana`; `Tab` / `Shift+Tab` cycles focus (input/results/preview)
@@ -141,6 +143,7 @@ make dev
 
 # Assuming binaries are installed already
 make daemon-start
+vicaya-tui .
 vicaya-tui
 
 # Stop the daemon when done
