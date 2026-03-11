@@ -87,6 +87,17 @@ Use Conventional Commits: `type(scope): summary`
 - Target >80% coverage for vicaya-core and vicaya-index
 - Always run `make check` before pushing
 
+## Architecture Documentation
+
+The `docs/ARCHITECTURE.md` file contains comprehensive documentation of vicaya's architecture. **Keep it in sync with code changes:**
+
+- Update ARCHITECTURE.md when modifying core data structures (FileTable, TrigramIndex, DaemonState, etc.)
+- Update ARCHITECTURE.md when changing IPC protocol or message types
+- Update ARCHITECTURE.md when modifying daemon thread model or synchronization
+- Update ARCHITECTURE.md when changing persistence format (index.bin, journal)
+- Update ARCHITECTURE.md when adding new crates to the workspace
+- Update diagrams when data flow changes significantly
+
 ## Pre-push Hook
 
 lefthook runs `make ci` (fmt-check + lint + test + build) before push. Install with:
