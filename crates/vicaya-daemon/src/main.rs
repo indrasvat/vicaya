@@ -55,8 +55,13 @@ fn main() -> Result<()> {
         snapshot,
     )));
 
-    // Replay journal (if any) to ensure we don't lose updates across restarts.
-    replay_journal(&state, &journal_file)?;
+    // Fresh scans are authoritative. Only replay downtime journal entries when we had an
+    // existing on-disk snapshot to reconcile against.
+    if had_index {
+        replay_journal(&state, &journal_file)?;
+    } else {
+        clear_stale_journal(&journal_file)?;
+    }
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let journal_lock = Arc::new(Mutex::new(()));
@@ -166,6 +171,24 @@ fn replay_journal(state: &SharedState, journal_file: &Path) -> Result<()> {
     if applied > 0 {
         info!("Replayed {} journal updates", applied);
     }
+    Ok(())
+}
+
+fn clear_stale_journal(journal_file: &Path) -> Result<()> {
+    if !journal_file.exists() {
+        return Ok(());
+    }
+
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(journal_file)?;
+    drop(file);
+
+    info!(
+        "Discarded stale journal history after fresh index build: {}",
+        journal_file.display()
+    );
     Ok(())
 }
 
