@@ -1,3 +1,10 @@
+## [1.1.4](https://github.com/indrasvat/vicaya/compare/v1.1.3...v1.1.4) (2026-03-11)
+
+
+### Bug Fixes
+
+* **daemon:** skip stale startup journal replay ([#26](https://github.com/indrasvat/vicaya/issues/26)) ([def85d5](https://github.com/indrasvat/vicaya/commit/def85d561536510339fe798a7ca73cb326c2ba15))
+
 ## [1.1.3](https://github.com/indrasvat/vicaya/compare/v1.1.2...v1.1.3) (2026-03-11)
 
 
