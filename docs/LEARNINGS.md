@@ -10,6 +10,7 @@ This document captures execution-time learnings that should be applied to every 
   - stop resident `vicaya-daemon` and `vicaya-tui` processes
   - restart the daemon from this checkout's `target/release/vicaya`
 - Verify the binary under test with `./target/release/vicaya --version` and related `--version` calls. Capture the reported git revision when debugging automation drift.
+- When the final release is under test, make the automation select binaries from `~/.cargo/bin` (or another explicit binary root) instead of assuming `target/release`.
 
 ## iTerm2 Automation Guardrails
 
@@ -44,6 +45,26 @@ This document captures execution-time learnings that should be applied to every 
 - Take screenshots at every meaningful state transition, not just at the end.
 - Pair screenshots with screen-text dumps for terminal UI debugging. Screenshots catch layout issues; dumps catch missing textual markers and false-positive assertions.
 - Keep screenshots under `.claude/screenshots`. Do not commit them.
+
+## Scope Path Hygiene
+
+- Do not canonicalize user-facing scope paths if the indexed filesystem may preserve a different lexical alias for the same directory.
+- Concrete finding from Task `008`: canonicalizing `/var/...` to `/private/var/...` caused explicit `filter_scope` matching to miss indexed paths recorded under `/var/...`.
+- Prefer:
+  - expand `~` and environment variables
+  - make the path absolute relative to the launch cwd
+  - normalize `.` / `..`
+  - validate the directory exists
+- Avoid rewriting the lexical root unless the indexed path space is rewritten the same way.
+
+## Fixture and PII Discipline
+
+- Repo-tracked automation must not hardcode personal document names, personal directories, or other sensitive local file names.
+- Use runtime fixture discovery for user directories such as `~/Documents`, `~/Desktop`, and `~/Downloads`.
+- Keep checked-in assertions generic:
+  - use labels like `documents_fixture` or `downloads_fixture`
+  - prefer generic query names such as `README.md`, `CLAUDE.md`, `query.rs`, `verification_report`, or `Screenshot`
+- If a useful local fixture name is sensitive, it can still appear in local runtime output or screenshots, but it must not be baked into git-tracked source or docs.
 
 ## Existing Runtime Interference
 
