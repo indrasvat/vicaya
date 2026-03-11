@@ -181,6 +181,10 @@ impl<'a> QueryEngine<'a> {
         scope_depth: Option<usize>,
         limit: usize,
     ) -> Vec<SearchResult> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
         let mut ranked: Vec<(SearchResult, RankFeatures)> = Vec::new();
         // Early termination: if we scan 1000 files without finding any matches,
         // assume the query won't match anything and stop (prevents hang on special chars)
@@ -193,25 +197,51 @@ impl<'a> QueryEngine<'a> {
             }
 
             if let Some(result) = self.score_candidate(file_id, query, scope, scope_depth) {
-                ranked.push(result);
+                self.push_ranked_candidate(&mut ranked, result, limit);
             }
         }
 
         self.sort_ranked_results(&mut ranked);
-        ranked.truncate(limit);
         ranked.into_iter().map(|(r, _)| r).collect()
     }
 
     fn sort_ranked_results(&self, ranked: &mut [(SearchResult, RankFeatures)]) {
-        ranked.sort_by(|(a, af), (b, bf)| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| bf.context_score.cmp(&af.context_score))
-                .then_with(|| b.mtime.cmp(&a.mtime))
-                .then_with(|| af.path_depth.cmp(&bf.path_depth))
-                .then_with(|| a.path.cmp(&b.path))
-        });
+        ranked.sort_by(Self::compare_ranked);
+    }
+
+    fn push_ranked_candidate(
+        &self,
+        ranked: &mut Vec<(SearchResult, RankFeatures)>,
+        candidate: (SearchResult, RankFeatures),
+        limit: usize,
+    ) {
+        if ranked.len() < limit {
+            ranked.push(candidate);
+            return;
+        }
+
+        if let Some((worst_index, worst)) = ranked
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| Self::compare_ranked(a, b))
+        {
+            if Self::compare_ranked(&candidate, worst) == Ordering::Less {
+                ranked[worst_index] = candidate;
+            }
+        }
+    }
+
+    fn compare_ranked(
+        (a, af): &(SearchResult, RankFeatures),
+        (b, bf): &(SearchResult, RankFeatures),
+    ) -> Ordering {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| bf.context_score.cmp(&af.context_score))
+            .then_with(|| b.mtime.cmp(&a.mtime))
+            .then_with(|| af.path_depth.cmp(&bf.path_depth))
+            .then_with(|| a.path.cmp(&b.path))
     }
 
     fn path_depth(path: &str) -> usize {
