@@ -1,6 +1,8 @@
 //! Common filesystem paths used by vicaya.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::{Error, Result};
 
 /// Base directory for vicaya state (config, socket, pid, etc).
 ///
@@ -33,9 +35,120 @@ pub fn socket_path() -> PathBuf {
     vicaya_dir().join("daemon.sock")
 }
 
+/// Expand `~` and environment variables in a user-supplied path.
+pub fn expand_user_path(path: &Path) -> PathBuf {
+    let path_str = path.to_string_lossy();
+    match shellexpand::full(&path_str) {
+        Ok(expanded) => PathBuf::from(expanded.as_ref()),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+/// Resolve a user-supplied directory path to an absolute normalized directory.
+pub fn resolve_scope_dir(path: &Path) -> Result<PathBuf> {
+    let expanded = expand_user_path(path);
+    let absolute = if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir()?.join(expanded)
+    };
+
+    let normalized = normalize_absolute_path(&absolute);
+    let metadata = std::fs::metadata(&normalized).map_err(|err| {
+        Error::Other(format!(
+            "Failed to resolve scope directory '{}': {}",
+            path.display(),
+            err
+        ))
+    })?;
+
+    if !metadata.is_dir() {
+        return Err(Error::Other(format!(
+            "Scope path '{}' is not a directory",
+            path.display()
+        )));
+    }
+
+    Ok(normalized)
+}
+
+fn normalize_absolute_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
 #[doc(hidden)]
 pub fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
     use std::sync::{Mutex, OnceLock};
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CwdGuard(PathBuf);
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    #[test]
+    fn expand_user_path_preserves_relative_paths() {
+        assert_eq!(expand_user_path(Path::new("./foo")), PathBuf::from("./foo"));
+    }
+
+    #[test]
+    fn expand_user_path_expands_home_prefix() {
+        let _lock = test_env_lock();
+        let home = std::env::var("HOME").expect("HOME should be set");
+        assert_eq!(
+            expand_user_path(Path::new("~/Documents")),
+            PathBuf::from(home).join("Documents")
+        );
+    }
+
+    #[test]
+    fn resolve_scope_dir_canonicalizes_relative_directories() {
+        let _lock = test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let old_cwd = std::env::current_dir().unwrap();
+        let _cwd_guard = CwdGuard(old_cwd);
+        std::env::set_current_dir(dir.path()).unwrap();
+        let expected_root = std::env::current_dir().unwrap();
+
+        std::fs::create_dir_all("alpha/beta").unwrap();
+        let resolved = resolve_scope_dir(Path::new("./alpha/../alpha/beta")).unwrap();
+
+        assert_eq!(resolved, expected_root.join("alpha/beta"));
+    }
+
+    #[test]
+    fn resolve_scope_dir_rejects_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let err = resolve_scope_dir(&file).unwrap_err();
+        assert!(
+            err.to_string().contains("not a directory"),
+            "unexpected error: {err}"
+        );
+    }
 }

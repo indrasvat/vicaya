@@ -19,7 +19,8 @@ pub enum WorkerCommand {
         query: String,
         limit: usize,
         view: ViewKind,
-        scope: Option<std::path::PathBuf>,
+        boost_scope: Option<std::path::PathBuf>,
+        filter_scope: Option<std::path::PathBuf>,
         niyamas: Vec<Niyama>,
     },
     Preview {
@@ -68,7 +69,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
         query: String,
         limit: usize,
         view: ViewKind,
-        scope: Option<std::path::PathBuf>,
+        boost_scope: Option<std::path::PathBuf>,
+        filter_scope: Option<std::path::PathBuf>,
         niyamas: Vec<Niyama>,
     }
 
@@ -84,7 +86,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     query,
                     limit,
                     view,
-                    scope,
+                    boost_scope,
+                    filter_scope,
                     niyamas,
                 } => {
                     pending_search = Some(PendingSearch {
@@ -92,7 +95,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                         query,
                         limit,
                         view,
-                        scope,
+                        boost_scope,
+                        filter_scope,
                         niyamas,
                     })
                 }
@@ -111,7 +115,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     query,
                     limit,
                     view,
-                    scope,
+                    boost_scope,
+                    filter_scope,
                     niyamas,
                 } => {
                     pending_search = Some(PendingSearch {
@@ -119,7 +124,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                         query,
                         limit,
                         view,
-                        scope,
+                        boost_scope,
+                        filter_scope,
                         niyamas,
                     })
                 }
@@ -140,13 +146,14 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             query,
             limit,
             view,
-            scope,
+            boost_scope,
+            filter_scope,
             niyamas,
         }) = pending_search.take()
         {
             let trimmed = query.trim().to_string();
-            let filter_scope = scope.as_deref();
-            let boost_scope = scope
+            let filter_scope = filter_scope.as_deref();
+            let boost_scope = boost_scope
                 .as_ref()
                 .cloned()
                 .or_else(|| std::env::current_dir().ok());
@@ -155,18 +162,19 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             // When query is empty, request recent files from daemon
             let recent_if_empty = trimmed.is_empty();
 
-            let mut results = match client.search(&trimmed, limit, boost_scope, recent_if_empty) {
-                Ok(r) => r,
-                Err(e) => {
-                    client.reconnect();
-                    let _ = evt_tx.send(WorkerEvent::SearchResults {
-                        id,
-                        results: Vec::new(),
-                        error: Some(format!("Search error: {}", e)),
-                    });
-                    continue;
-                }
-            };
+            let mut results =
+                match client.search(&trimmed, limit, boost_scope, filter_scope, recent_if_empty) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        client.reconnect();
+                        let _ = evt_tx.send(WorkerEvent::SearchResults {
+                            id,
+                            results: Vec::new(),
+                            error: Some(format!("Search error: {}", e)),
+                        });
+                        continue;
+                    }
+                };
 
             // Scope + Niyama filtering (best-effort).
             results.retain(|r| matches_filters(r, view, filter_scope, &niyamas));

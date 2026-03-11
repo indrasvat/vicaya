@@ -288,5 +288,6 @@ pub fn run_query(
         term: query.to_string(),
         limit,
         scope: scope.map(std::path::PathBuf::from),
+        filter_scope: None,
     })
 }

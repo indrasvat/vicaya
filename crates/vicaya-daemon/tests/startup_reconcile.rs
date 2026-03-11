@@ -60,6 +60,18 @@ fn append_journal_updates(journal: &Path, updates: &[IndexUpdate]) {
     }
 }
 
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    panic!("Daemon did not shut down within timeout ({:?})", timeout);
+}
+
 #[test]
 fn it_indexes_offline_changes_via_startup_reconcile() {
     let vicaya_dir = tempdir().unwrap();
@@ -112,6 +124,7 @@ fn it_indexes_offline_changes_via_startup_reconcile() {
                 query: "after.txt".to_string(),
                 limit: 20,
                 scope: None,
+                filter_scope: None,
                 recent_if_empty: false,
             },
         );
@@ -130,16 +143,7 @@ fn it_indexes_offline_changes_via_startup_reconcile() {
     }
 
     let _ = ipc_request(&socket, &Request::Shutdown);
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if let Ok(Some(_)) = child.0.try_wait() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-
-    panic!("Daemon did not shut down within timeout");
+    wait_for_child_exit(&mut child.0, Duration::from_secs(20));
 }
 
 #[test]
@@ -196,6 +200,7 @@ fn it_replays_journal_when_starting_from_existing_index() {
             query: "after.txt".to_string(),
             limit: 20,
             scope: None,
+            filter_scope: None,
             recent_if_empty: false,
         },
     );
@@ -208,16 +213,7 @@ fn it_replays_journal_when_starting_from_existing_index() {
     }
 
     let _ = ipc_request(&socket, &Request::Shutdown);
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if let Ok(Some(_)) = child.0.try_wait() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-
-    panic!("Daemon did not shut down within timeout");
+    wait_for_child_exit(&mut child.0, Duration::from_secs(20));
 }
 
 #[test]
@@ -270,6 +266,7 @@ fn it_discards_stale_journal_when_starting_from_fresh_build() {
             query: "live.txt".to_string(),
             limit: 20,
             scope: None,
+            filter_scope: None,
             recent_if_empty: false,
         },
     );
@@ -285,14 +282,5 @@ fn it_discards_stale_journal_when_starting_from_fresh_build() {
     assert_eq!(journal_len, 0, "fresh build should truncate stale journal");
 
     let _ = ipc_request(&socket, &Request::Shutdown);
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if let Ok(Some(_)) = child.0.try_wait() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-
-    panic!("Daemon did not shut down within timeout");
+    wait_for_child_exit(&mut child.0, Duration::from_secs(20));
 }

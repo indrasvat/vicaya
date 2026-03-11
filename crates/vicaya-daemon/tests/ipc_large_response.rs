@@ -93,6 +93,7 @@ fn it_handles_large_search_responses_without_truncation() {
             query: "LargeResponseTest".to_string(),
             limit: 500,
             scope: None,
+            filter_scope: None,
             recent_if_empty: false,
         },
     );
@@ -187,6 +188,7 @@ fn it_rejects_oversized_requests_and_stays_responsive() {
             query: "healthy.txt".to_string(),
             limit: 10,
             scope: None,
+            filter_scope: None,
             recent_if_empty: false,
         },
     );

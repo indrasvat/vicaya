@@ -15,6 +15,26 @@ vicaya demonstrates **significant performance advantages** over traditional Unix
 - **Sub-10ms** query latency (mean: 6.0ms)
 - **Minimal memory footprint** (11KB index for 42 files)
 
+## 2026-03-11 Scoped Search Snapshot
+
+Branch-local `hyperfine` runs on macOS against the release binaries showed that
+explicit subtree scoping improves end-to-end CLI search latency on realistic
+queries instead of regressing it.
+
+| Command Shape | Mean Time |
+| --- | --- |
+| `vicaya search "README.md" --limit 20` | `84.4 ms ± 3.1 ms` |
+| `vicaya search "README.md" --scope <repo> --limit 20` | `60.2 ms ± 3.8 ms` |
+| `vicaya search "query.rs" --scope <repo> --limit 20` | `39.3 ms ± 1.1 ms` |
+| `vicaya search "energy_analysis" --scope <downloads> --limit 20` | `30.6 ms ± 1.9 ms` |
+
+Key takeaways:
+
+- explicit scope filtering did not slow the CLI path down
+- narrower scoped queries were materially faster than the unscoped baseline
+- the improvement is largest when the query would otherwise compete with many
+  global matches
+
 ## Detailed Benchmark Results
 
 ### Test 1: Search for "main" (filename substring)

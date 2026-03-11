@@ -41,6 +41,7 @@ impl IpcClient {
         query: &str,
         limit: usize,
         scope: Option<&std::path::Path>,
+        filter_scope: Option<&std::path::Path>,
         recent_if_empty: bool,
     ) -> anyhow::Result<Vec<SearchResult>> {
         // If query is empty and we don't want recent files, return early
@@ -52,6 +53,7 @@ impl IpcClient {
             query: query.to_string(),
             limit,
             scope: scope.map(|p| p.to_string_lossy().to_string()),
+            filter_scope: filter_scope.map(|p| p.to_string_lossy().to_string()),
             recent_if_empty,
         };
 

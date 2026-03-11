@@ -42,7 +42,7 @@ fn open_file_in_editor(path: &str) -> Result<()> {
 }
 
 /// Run the TUI application
-pub fn run() -> Result<()> {
+pub fn run(startup_scope: Option<std::path::PathBuf>) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -51,7 +51,7 @@ pub fn run() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = AppState::new();
+    let mut app = AppState::with_startup_scope(startup_scope);
 
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>();
     let (evt_tx, evt_rx) = mpsc::channel::<WorkerEvent>();
@@ -1004,7 +1004,8 @@ fn trigger_search(
         query: parsed.term,
         limit: 100,
         view: app.view,
-        scope: app.ksetra.current().cloned(),
+        boost_scope: app.ksetra.current().cloned(),
+        filter_scope: app.ksetra.current().cloned(),
         niyamas: parsed.niyamas,
     });
     *last_search_sent_at = std::time::Instant::now();

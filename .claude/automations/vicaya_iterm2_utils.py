@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -24,9 +25,11 @@ import iterm2
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCREENSHOT_DIR = PROJECT_ROOT / ".claude" / "screenshots"
-CLI_BINARY = PROJECT_ROOT / "target" / "release" / "vicaya"
-DAEMON_BINARY = PROJECT_ROOT / "target" / "release" / "vicaya-daemon"
-TUI_BINARY = PROJECT_ROOT / "target" / "release" / "vicaya-tui"
+DEFAULT_BINARY_ROOT = PROJECT_ROOT / "target" / "release"
+BINARY_ROOT = Path(os.environ.get("VICAYA_BINARY_ROOT", str(DEFAULT_BINARY_ROOT))).expanduser()
+CLI_BINARY = BINARY_ROOT / "vicaya"
+DAEMON_BINARY = BINARY_ROOT / "vicaya-daemon"
+TUI_BINARY = BINARY_ROOT / "vicaya-tui"
 BUILD_CMD = [
     "cargo",
     "build",
@@ -44,6 +47,22 @@ CONFLICTING_PROCESS_PATTERNS = [
     "vicaya-tui",
 ]
 PROCESS_CLEANUP_SETTLE_SECONDS = 0.8
+
+SAFE_NAME_PREFIXES = (
+    "README",
+    "CLAUDE",
+    "Cargo",
+    "query",
+    "main",
+    "verification",
+    "energy",
+    "Screenshot",
+    "Screen Shot",
+    "example",
+    "sample",
+    "Hack",
+)
+SAFE_SUFFIXES = {".md", ".rs", ".toml", ".txt", ".html", ".png", ".pdf", ".ttf"}
 
 
 def get_iterm2_window_id() -> int | None:
@@ -74,8 +93,32 @@ def capture_screenshot(name: str) -> str:
     return str(path)
 
 
+def using_workspace_binaries() -> bool:
+    return BINARY_ROOT.resolve() == DEFAULT_BINARY_ROOT.resolve()
+
+
+def binary_version(binary: Path) -> str:
+    result = subprocess.run(
+        [str(binary), "--version"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def print_binary_versions() -> None:
+    print(f"Using binary root: {BINARY_ROOT}")
+    for binary in (CLI_BINARY, DAEMON_BINARY, TUI_BINARY):
+        print(f"  {binary.name}: {binary_version(binary)}")
+
+
 def ensure_release_binaries() -> None:
     """Always build release binaries so automation exercises the current branch."""
+    if not using_workspace_binaries():
+        print(f"Skipping build; using external binaries from {BINARY_ROOT}")
+        return
     print("Building release binaries for automation...")
     subprocess.run(BUILD_CMD, cwd=PROJECT_ROOT, check=True)
 
@@ -115,6 +158,7 @@ def daemon_running() -> bool:
 def start_daemon_if_needed() -> bool:
     """Restart the daemon from this branch's binary for a clean automation session."""
     stop_conflicting_vicaya_processes()
+    print_binary_versions()
     print("Starting vicaya daemon for automation...")
     subprocess.run([str(CLI_BINARY), "daemon", "start"], cwd=PROJECT_ROOT, check=True)
     time.sleep(1.5)
@@ -188,15 +232,52 @@ async def wait_for_all(session, needles: list[str], timeout: float = 10.0) -> bo
     )
 
 
-async def start_tui_session(window, tab_name: str):
+def discover_fixture(
+    root: Path,
+    *,
+    preferred_names: list[str] | None = None,
+    allowed_suffixes: tuple[str, ...] = (),
+) -> Path | None:
+    if not root.exists():
+        return None
+
+    preferred_lower = {name.lower() for name in preferred_names or []}
+
+    all_files = [path for path in sorted(root.rglob("*")) if path.is_file()]
+
+    for path in all_files:
+        if path.name.lower() in preferred_lower:
+            return path
+
+    safe_prefixes_lower = tuple(prefix.lower() for prefix in SAFE_NAME_PREFIXES)
+    for path in all_files:
+        name = path.name
+        lower_name = name.lower()
+        if allowed_suffixes and path.suffix.lower() in allowed_suffixes:
+            if name.startswith(SAFE_NAME_PREFIXES) or lower_name.startswith(safe_prefixes_lower):
+                return path
+    return None
+
+
+def format_scope_marker(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except Exception:
+        return str(path)
+
+
+async def start_tui_session(window, tab_name: str, *, cwd: Path | None = None, args: list[str] | None = None):
     """Open a fresh tab, launch vicaya-tui, and wait for stable header text."""
     tab = await window.async_create_tab()
     session = tab.current_session
     await session.async_set_name(tab_name)
+    launch_cwd = cwd or PROJECT_ROOT
+    quoted_args = " ".join(shlex.quote(arg) for arg in (args or []))
+    launch_cmd = f"{shlex.quote(str(TUI_BINARY))} {quoted_args}".strip()
     # Clear tty discard before launch so control-key automation has a chance to reach the TUI.
     await send_text(
         session,
-        f"cd {PROJECT_ROOT} && stty discard undef 2>/dev/null; {TUI_BINARY}\n",
+        f"cd {shlex.quote(str(launch_cwd))} && stty discard undef 2>/dev/null; {launch_cmd}\n",
         delay=1.8,
     )
 

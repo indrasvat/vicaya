@@ -61,10 +61,20 @@ pub struct AppState {
 impl AppState {
     /// Create a new application state
     pub fn new() -> Self {
+        Self::with_startup_scope(None)
+    }
+
+    /// Create a new application state with an optional startup ksetra scope.
+    pub fn with_startup_scope(startup_scope: Option<PathBuf>) -> Self {
+        let mut ksetra = KsetraState::new();
+        if let Some(scope) = startup_scope {
+            ksetra.push(scope);
+        }
+
         Self {
             mode: AppMode::Search,
             view: ViewKind::Patra,
-            ksetra: KsetraState::new(),
+            ksetra,
             ksetra_input: KsetraInputState::new(),
             search: SearchState::new(),
             preview: PreviewState::new(),
@@ -1413,6 +1423,13 @@ mod tests {
         ksetra.push(PathBuf::from("/tmp/project"));
         ksetra.push(PathBuf::from("/tmp/project/src"));
         assert_eq!(ksetra.breadcrumbs(), "/tmp/project ▸ src");
+    }
+
+    #[test]
+    fn app_state_applies_startup_scope_to_ksetra() {
+        let app = AppState::with_startup_scope(Some(PathBuf::from("/tmp/project")));
+        assert_eq!(app.ksetra.current(), Some(&PathBuf::from("/tmp/project")));
+        assert_eq!(app.ksetra.breadcrumbs(), "/tmp/project");
     }
 
     #[test]

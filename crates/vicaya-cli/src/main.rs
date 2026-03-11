@@ -4,6 +4,7 @@ mod ipc_client;
 mod metrics;
 
 use clap::{ArgAction, Parser, Subcommand};
+use std::path::{Path, PathBuf};
 use tracing::info;
 use vicaya_core::ipc::{Request, Response};
 use vicaya_core::{Config, Result};
@@ -11,7 +12,7 @@ use vicaya_scanner::Scanner;
 
 use crate::ipc_client::IpcClient;
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(name = "vicaya")]
 #[command(about = "विचय — blazing-fast filesystem search for macOS", long_about = None)]
 #[command(disable_version_flag = true)]
@@ -24,7 +25,7 @@ struct Cli {
     command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Commands {
     /// Initialize configuration (creates config file if it doesn't exist)
     Init {
@@ -45,6 +46,10 @@ enum Commands {
         /// Output format (table, json, plain)
         #[arg(short, long, default_value = "table")]
         format: String,
+
+        /// Restrict results to this directory subtree
+        #[arg(long, value_name = "DIR")]
+        scope: Option<PathBuf>,
     },
 
     /// Rebuild the index
@@ -71,7 +76,7 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum DaemonAction {
     /// Start the daemon
     Start,
@@ -102,8 +107,9 @@ fn main() -> Result<()> {
             query,
             limit,
             format,
+            scope,
         }) => {
-            search(&query, limit, &format)?;
+            search(&query, limit, &format, scope.as_deref())?;
         }
         Some(Commands::Rebuild { dry_run }) => {
             rebuild(dry_run)?;
@@ -129,7 +135,30 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn search(query: &str, limit: usize, format: &str) -> Result<()> {
+fn build_search_request(query: &str, limit: usize, scope: Option<&Path>) -> Result<Request> {
+    let boost_scope = std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string());
+    let filter_scope = scope
+        .map(vicaya_core::paths::resolve_scope_dir)
+        .transpose()?
+        .map(|p| p.to_string_lossy().to_string());
+    let boost_scope = if filter_scope.is_some() {
+        filter_scope.clone()
+    } else {
+        boost_scope
+    };
+
+    Ok(Request::Search {
+        query: query.to_string(),
+        limit,
+        scope: boost_scope,
+        filter_scope,
+        recent_if_empty: false,
+    })
+}
+
+fn search(query: &str, limit: usize, format: &str, scope: Option<&Path>) -> Result<()> {
     // Auto-start daemon if not running
     if !vicaya_core::daemon::is_running() {
         if format == "json" {
@@ -148,14 +177,7 @@ fn search(query: &str, limit: usize, format: &str) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
-    let request = Request::Search {
-        query: query.to_string(),
-        limit,
-        scope: std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().to_string()),
-        recent_if_empty: false,
-    };
+    let request = build_search_request(query, limit, scope)?;
 
     let response = IpcClient::connect()?.request(&request)?;
 
@@ -853,4 +875,71 @@ reconcile_hour = 3
     println!("  4. Search: vicaya search <query>");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn cli_parses_search_scope_flag() {
+        let cli = Cli::parse_from(["vicaya", "search", "query.rs", "--scope", "/tmp/repo"]);
+
+        match cli.command {
+            Some(Commands::Search { scope, .. }) => {
+                assert_eq!(scope, Some(PathBuf::from("/tmp/repo")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_search_request_preserves_default_boost_scope() {
+        let old_cwd = std::env::current_dir().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        let expected_cwd = std::env::current_dir().unwrap();
+
+        let request = build_search_request("query.rs", 20, None).unwrap();
+
+        std::env::set_current_dir(old_cwd).unwrap();
+
+        match request {
+            Request::Search {
+                scope,
+                filter_scope,
+                ..
+            } => {
+                assert_eq!(scope, Some(expected_cwd.to_string_lossy().to_string()));
+                assert!(filter_scope.is_none());
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_search_request_sets_filter_scope_when_requested() {
+        let temp = tempfile::tempdir().unwrap();
+        let scoped = temp.path().join("repo");
+        std::fs::create_dir_all(&scoped).unwrap();
+
+        let request = build_search_request("query.rs", 20, Some(&scoped)).unwrap();
+        let expected = vicaya_core::paths::resolve_scope_dir(&scoped)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        match request {
+            Request::Search {
+                scope,
+                filter_scope,
+                ..
+            } => {
+                assert_eq!(scope, Some(expected.clone()));
+                assert_eq!(filter_scope, Some(expected));
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
 }
