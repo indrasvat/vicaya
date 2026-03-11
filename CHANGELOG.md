@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/indrasvat/vicaya/compare/v1.1.0...v1.1.1) (2026-03-11)
+
+
+### Bug Fixes
+
+* **tui:** make search inputs utf8 safe ([#23](https://github.com/indrasvat/vicaya/issues/23)) ([f10f135](https://github.com/indrasvat/vicaya/commit/f10f135f4644b8da4e810d3896b881afff6b4b12))
+
 # [1.1.0](https://github.com/indrasvat/vicaya/compare/v1.0.1...v1.1.0) (2026-01-16)
 
 
