@@ -7,6 +7,7 @@
 - **Depends on:** None
 - **Blocks:** None
 - **L4 Visual:** Required
+- **Shared Learnings:** Consult [`docs/LEARNINGS.md`](../LEARNINGS.md) before implementation or automation
 
 ## Problem
 
