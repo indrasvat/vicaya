@@ -4,6 +4,7 @@
 - **Status:** TODO
 - **Scope:** GH issues `#15` through `#21`
 - **Primary Goal:** Maximize parallel throughput without creating avoidable merge churn
+- **Shared Learnings:** Consult [`docs/LEARNINGS.md`](/Users/indrasvat/code/github.com/indrasvat-vicaya/docs/LEARNINGS.md) before implementation or automation
 
 ## Recommendation
 

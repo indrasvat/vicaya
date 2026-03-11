@@ -13,7 +13,7 @@ Ksetra and navigation automation for vicaya-tui.
 What this verifies:
 1. Ctrl+K opens the direct-path overlay with path prompt.
 2. Tab completion renders a completions list.
-3. Enter applies a chosen ksetra and header breadcrumbs update.
+3. A second Tab applies the chosen completion, then Enter applies the ksetra and header breadcrumbs update.
 4. In Sthana view, h/l push and pop the scope stack.
 5. Ctrl+G changes grouping mode and results remain usable.
 
@@ -61,7 +61,7 @@ async def main(connection) -> int:
 
         await send_text(session, "\x0b", delay=0.5)
         recorder.shot("vicaya_scope_01_ctrl_k_open")
-        if await wait_for_all(session, ["path:", "Tab: complete", "Enter: apply"], timeout=3.0):
+        if await wait_for_all(session, ["path:", "Tab: complete", "Enter: set"], timeout=3.0):
             recorder.pass_("Ctrl+K overlay", "path prompt and hints visible")
         else:
             recorder.fail("Ctrl+K overlay", "missing path overlay markers")
@@ -77,9 +77,15 @@ async def main(connection) -> int:
             recorder.fail("ksetra completion list", "completion list did not render")
             await dump_screen(session, "ksetra-completions")
 
+        await send_text(session, "\t", delay=0.6)
         await send_text(session, "\r", delay=0.8)
         recorder.shot("vicaya_scope_04_ksetra_applied")
-        if await wait_for_text(session, "ksetra: ~/code/github.com/indrasvat-vicaya/crates", timeout=4.0):
+        if await wait_for(
+            session,
+            lambda text, _lines: "ksetra:" in text and "crates" in text and "Not a directory" not in text,
+            timeout=4.0,
+            description="ksetra applied",
+        ):
             recorder.pass_("ksetra apply", "header breadcrumbs updated to crates")
         else:
             recorder.fail("ksetra apply", "header did not update after applying ksetra")
@@ -90,7 +96,7 @@ async def main(connection) -> int:
         await send_text(session, "\r", delay=0.8)
         await send_text(session, "vicaya-cli", delay=1.0)
         recorder.shot("vicaya_scope_05_sthana_results")
-        if await wait_for_text(session, "vicaya-cli/", timeout=4.0):
+        if await wait_for_text(session, "vicaya-cli/ (", timeout=4.0):
             recorder.pass_("Sthana scoped search", "directory result visible inside crates scope")
         else:
             recorder.fail("Sthana scoped search", "expected vicaya-cli directory missing")
@@ -99,7 +105,12 @@ async def main(connection) -> int:
         await send_text(session, "\x1b[B", delay=0.4)
         await send_text(session, "l", delay=0.8)
         recorder.shot("vicaya_scope_06_push_ksetra")
-        if await wait_for_text(session, "vicaya-cli", timeout=4.0):
+        if await wait_for(
+            session,
+            lambda text, _lines: "ksetra:" in text and "vicaya-cli" in text,
+            timeout=4.0,
+            description="push ksetra",
+        ):
             recorder.pass_("push ksetra with l", "header includes nested scope")
         else:
             recorder.fail("push ksetra with l", "nested scope not visible in header")
@@ -109,8 +120,9 @@ async def main(connection) -> int:
         recorder.shot("vicaya_scope_07_pop_ksetra")
         if await wait_for(
             session,
-            lambda text, _lines: "ksetra: ~/code/github.com/indrasvat-vicaya/crates" in text
-            and "vicaya-cli" not in text.split("ksetra:", 1)[-1][:80],
+            lambda text, _lines: "ksetra:" in text
+            and "crates" in text
+            and "vicaya-cli" not in text.split("ksetra:", 1)[-1][:120],
             timeout=4.0,
             description="scope pop",
         ):

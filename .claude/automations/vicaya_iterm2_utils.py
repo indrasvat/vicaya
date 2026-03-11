@@ -39,6 +39,11 @@ BUILD_CMD = [
     "vicaya-tui",
 ]
 
+CONFLICTING_PROCESS_PATTERNS = [
+    "vicaya-daemon",
+    "vicaya-tui",
+]
+
 
 def get_iterm2_window_id() -> int | None:
     """Return the active iTerm2 CGWindowID if available."""
@@ -69,12 +74,26 @@ def capture_screenshot(name: str) -> str:
 
 
 def ensure_release_binaries() -> None:
-    """Build release binaries if they are missing."""
-    if CLI_BINARY.exists() and DAEMON_BINARY.exists() and TUI_BINARY.exists():
-        return
-
-    print("Building missing release binaries...")
+    """Always build release binaries so automation exercises the current branch."""
+    print("Building release binaries for automation...")
     subprocess.run(BUILD_CMD, cwd=PROJECT_ROOT, check=True)
+
+
+def stop_conflicting_vicaya_processes() -> None:
+    """Stop resident vicaya processes so automation uses this branch's binaries only."""
+    if CLI_BINARY.exists():
+        subprocess.run(
+            [str(CLI_BINARY), "daemon", "stop"],
+            cwd=PROJECT_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    for pattern in CONFLICTING_PROCESS_PATTERNS:
+        subprocess.run(["pkill", "-f", pattern], cwd=PROJECT_ROOT, check=False)
+
+    time.sleep(0.8)
 
 
 def daemon_running() -> bool:
@@ -93,10 +112,8 @@ def daemon_running() -> bool:
 
 
 def start_daemon_if_needed() -> bool:
-    """Start the daemon if absent. Returns True if this call started it."""
-    if daemon_running():
-        return False
-
+    """Restart the daemon from this branch's binary for a clean automation session."""
+    stop_conflicting_vicaya_processes()
     print("Starting vicaya daemon for automation...")
     subprocess.run([str(CLI_BINARY), "daemon", "start"], cwd=PROJECT_ROOT, check=True)
     time.sleep(1.5)
@@ -175,7 +192,12 @@ async def start_tui_session(window, tab_name: str):
     tab = await window.async_create_tab()
     session = tab.current_session
     await session.async_set_name(tab_name)
-    await send_text(session, f"cd {PROJECT_ROOT} && {TUI_BINARY}\n", delay=1.8)
+    # Clear tty discard before launch so control-key automation has a chance to reach the TUI.
+    await send_text(
+        session,
+        f"cd {PROJECT_ROOT} && stty discard undef 2>/dev/null; {TUI_BINARY}\n",
+        delay=1.8,
+    )
 
     ready = await wait_for_all(session, ["vicaya", "drishti:", "ksetra:"], timeout=15.0)
     if not ready:
