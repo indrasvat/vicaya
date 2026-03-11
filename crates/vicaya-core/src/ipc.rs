@@ -1,6 +1,13 @@
 //! IPC protocol for daemon communication.
 
+use std::io::BufRead;
+
 use serde::{Deserialize, Serialize};
+
+use crate::{Error, Result};
+
+/// Maximum newline-delimited IPC message size in bytes.
+pub const MAX_IPC_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Build metadata for a running daemon or client.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -108,6 +115,51 @@ impl Response {
     }
 }
 
+/// Read one newline-delimited IPC message without unbounded allocation.
+///
+/// Returns `Ok(None)` on clean EOF before any bytes are read. If EOF arrives
+/// after some bytes but before a newline, the partial message is returned so
+/// callers can decide whether it is valid.
+pub fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
+    let mut message = Vec::new();
+
+    loop {
+        let available = reader
+            .fill_buf()
+            .map_err(|e| Error::Ipc(format!("Failed to read IPC message: {}", e)))?;
+
+        if available.is_empty() {
+            if message.is_empty() {
+                return Ok(None);
+            }
+            return String::from_utf8(message)
+                .map(Some)
+                .map_err(|e| Error::Ipc(format!("IPC message was not valid UTF-8: {}", e)));
+        }
+
+        let take = match available.iter().position(|&byte| byte == b'\n') {
+            Some(newline_idx) => newline_idx + 1,
+            None => available.len(),
+        };
+
+        if message.len() + take > MAX_IPC_MESSAGE_BYTES {
+            return Err(Error::Ipc(format!(
+                "IPC message exceeds {} bytes",
+                MAX_IPC_MESSAGE_BYTES
+            )));
+        }
+
+        message.extend_from_slice(&available[..take]);
+        reader.consume(take);
+
+        if take > 0 && message.last() == Some(&b'\n') {
+            return String::from_utf8(message)
+                .map(Some)
+                .map_err(|e| Error::Ipc(format!("IPC message was not valid UTF-8: {}", e)));
+        }
+    }
+}
+
 /// Get the socket path for IPC communication.
 pub fn socket_path() -> std::path::PathBuf {
     crate::paths::socket_path()
@@ -115,6 +167,8 @@ pub fn socket_path() -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::io::BufReader;
+
     use super::*;
 
     #[test]
@@ -236,5 +290,36 @@ mod tests {
         assert_eq!(result.score, 1.0);
         assert_eq!(result.size, 2048);
         assert_eq!(result.mtime, 1234567890);
+    }
+
+    #[test]
+    fn test_read_message_under_limit_with_newline() {
+        let mut reader = BufReader::new(&b"{\"type\":\"status\"}\n"[..]);
+        let message = read_message(&mut reader).unwrap();
+        assert_eq!(message.as_deref(), Some("{\"type\":\"status\"}\n"));
+    }
+
+    #[test]
+    fn test_read_message_under_limit_without_newline() {
+        let mut reader = BufReader::new(&b"{\"type\":\"status\"}"[..]);
+        let message = read_message(&mut reader).unwrap();
+        assert_eq!(message.as_deref(), Some("{\"type\":\"status\"}"));
+    }
+
+    #[test]
+    fn test_read_message_rejects_payload_over_limit_without_newline() {
+        let oversized = vec![b'a'; MAX_IPC_MESSAGE_BYTES + 1];
+        let mut reader = BufReader::new(oversized.as_slice());
+        let err = read_message(&mut reader).unwrap_err();
+        assert!(matches!(err, Error::Ipc(message) if message.contains("exceeds")));
+    }
+
+    #[test]
+    fn test_read_message_rejects_payload_over_limit_before_newline() {
+        let mut oversized = vec![b'a'; MAX_IPC_MESSAGE_BYTES];
+        oversized.push(b'\n');
+        let mut reader = BufReader::new(oversized.as_slice());
+        let err = read_message(&mut reader).unwrap_err();
+        assert!(matches!(err, Error::Ipc(message) if message.contains("exceeds")));
     }
 }

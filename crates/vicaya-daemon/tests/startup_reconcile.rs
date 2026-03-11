@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -40,8 +40,9 @@ fn ipc_request(socket: &Path, req: &Request) -> Response {
         .expect("Should write request");
 
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("Should read response");
+    let line = vicaya_core::ipc::read_message(&mut reader)
+        .expect("Should read response")
+        .expect("Should receive response");
     Response::from_json(&line).expect("Should parse response")
 }
 

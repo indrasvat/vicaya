@@ -13,6 +13,7 @@ This document captures execution-time learnings that should be applied to every 
 
 ## iTerm2 Automation Guardrails
 
+- Run iTerm2 automation serially. Parallel runs fight over window focus, tab/session IDs, and key delivery, which makes failures non-deterministic even when the product is healthy.
 - `session.async_send_text(...)` is reliable for plain text, `Esc`, arrow keys, and most ordinary navigation.
 - Control-chord delivery is not equally reliable. `Ctrl+O` is especially suspect in terminal automation because tty discard handling can intercept it before the TUI sees it.
 - `stty discard undef` should be set before launching `vicaya-tui`, but that does not guarantee every control chord will be delivered consistently.

@@ -2,7 +2,7 @@
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -786,11 +786,9 @@ impl IpcServer {
         debug!("Client connected: {:?}", peer_addr);
 
         let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-
-        match reader.read_line(&mut line) {
-            Ok(0) => debug!("Client disconnected"),
-            Ok(_) => {
+        match vicaya_core::ipc::read_message(&mut reader) {
+            Ok(None) => debug!("Client disconnected"),
+            Ok(Some(line)) => {
                 let request = match Request::from_json(&line) {
                     Ok(req) => req,
                     Err(e) => {
@@ -807,7 +805,13 @@ impl IpcServer {
                 let response = self.handle_request(request);
                 self.send_response(&mut stream, &response);
             }
-            Err(e) => error!("Failed to read from client: {}", e),
+            Err(e) => {
+                error!("Failed to read from client: {}", e);
+                let response = Response::Error {
+                    message: e.to_string(),
+                };
+                self.send_response(&mut stream, &response);
+            }
         }
     }
 
