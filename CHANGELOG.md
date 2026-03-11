@@ -1,3 +1,10 @@
+## [1.1.6](https://github.com/indrasvat/vicaya/compare/v1.1.5...v1.1.6) (2026-03-11)
+
+
+### Bug Fixes
+
+* **index:** rank best short-query matches ([#28](https://github.com/indrasvat/vicaya/issues/28)) ([b8f7ed3](https://github.com/indrasvat/vicaya/commit/b8f7ed3ee3a4e6f16846508000e01b0d7c8b02fa))
+
 ## [1.1.5](https://github.com/indrasvat/vicaya/compare/v1.1.4...v1.1.5) (2026-03-11)
 
 
