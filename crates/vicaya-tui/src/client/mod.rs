@@ -1,6 +1,6 @@
 //! IPC client for communicating with the daemon.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use vicaya_core::ipc::{Request, Response};
 use vicaya_index::SearchResult;
@@ -149,10 +149,8 @@ impl IpcClient {
 
         // Read response
         let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
+        let line = vicaya_core::ipc::read_message(&mut reader)?
+            .ok_or_else(|| anyhow::anyhow!("Daemon closed IPC connection"))?;
 
         Response::from_json(&line).map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
     }
