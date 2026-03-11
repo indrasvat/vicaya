@@ -304,7 +304,8 @@ pub fn render_preview_search(f: &mut Frame, app: &AppState) {
 
     f.render_widget(input, area);
 
-    let cursor_x = area.x + 1 + "purvadarshana /: ".len() as u16 + app.preview.search_cursor as u16;
+    let cursor_display_width = ui::display_width_up_to(query, app.preview.search_cursor) as u16;
+    let cursor_x = area.x + 1 + "purvadarshana /: ".len() as u16 + cursor_display_width;
     let cursor_y = area.y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
 }

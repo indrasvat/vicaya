@@ -69,8 +69,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     f.render_widget(input, area);
 
     if is_focused {
-        // Cursor position: 1 (border) + len("Prashna: ") + cursor
-        let cursor_x = area.x + 1 + "prashna: ".len() as u16 + cursor_pos as u16;
+        let cursor_display_width = ui::display_width_up_to(query, cursor_pos) as u16;
+        let cursor_x = area.x + 1 + "prashna: ".len() as u16 + cursor_display_width;
         let cursor_y = area.y + 1;
         f.set_cursor_position((cursor_x, cursor_y));
     }
