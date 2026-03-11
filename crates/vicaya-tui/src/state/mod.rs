@@ -1147,11 +1147,7 @@ impl KsetraInputState {
 
     pub fn pop_char(&mut self) {
         if self.cursor > 0 {
-            // Find the previous character boundary
-            let mut new_cursor = self.cursor - 1;
-            while new_cursor > 0 && !self.input.is_char_boundary(new_cursor) {
-                new_cursor -= 1;
-            }
+            let new_cursor = previous_char_boundary(&self.input, self.cursor);
             self.input.remove(new_cursor);
             self.cursor = new_cursor;
             self.error = None;
@@ -1167,21 +1163,13 @@ impl KsetraInputState {
 
     pub fn move_cursor_left(&mut self) {
         if self.cursor > 0 {
-            let mut new_cursor = self.cursor - 1;
-            while new_cursor > 0 && !self.input.is_char_boundary(new_cursor) {
-                new_cursor -= 1;
-            }
-            self.cursor = new_cursor;
+            self.cursor = previous_char_boundary(&self.input, self.cursor);
         }
     }
 
     pub fn move_cursor_right(&mut self) {
         if self.cursor < self.input.len() {
-            let mut new_cursor = self.cursor + 1;
-            while new_cursor < self.input.len() && !self.input.is_char_boundary(new_cursor) {
-                new_cursor += 1;
-            }
-            self.cursor = new_cursor;
+            self.cursor = next_char_boundary(&self.input, self.cursor);
         }
     }
 

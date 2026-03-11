@@ -65,7 +65,7 @@ async def main(connection) -> int:
         recorder.shot("vicaya_core_01_startup")
         recorder.pass_("startup header", "vicaya, drishti, ksetra visible")
 
-        await send_text(session, "\x1b[B", delay=0.4)
+        await send_text(session, "\x1b[B", delay=0.4)  # Move focus out of the search input so `?` opens help.
         await send_text(session, "?", delay=0.4)
         recorder.shot("vicaya_core_02_help_overlay")
         if await wait_for(

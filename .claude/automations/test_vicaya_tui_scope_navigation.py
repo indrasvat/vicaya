@@ -120,6 +120,8 @@ async def main(connection) -> int:
         recorder.shot("vicaya_scope_07_pop_ksetra")
         if await wait_for(
             session,
+            # Limit the "vicaya-cli" check to the first 120 chars after "ksetra:" so
+            # results-list matches do not masquerade as header breadcrumbs.
             lambda text, _lines: "ksetra:" in text
             and "crates" in text
             and "vicaya-cli" not in text.split("ksetra:", 1)[-1][:120],

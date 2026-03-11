@@ -43,6 +43,7 @@ CONFLICTING_PROCESS_PATTERNS = [
     "vicaya-daemon",
     "vicaya-tui",
 ]
+PROCESS_CLEANUP_SETTLE_SECONDS = 0.8
 
 
 def get_iterm2_window_id() -> int | None:
@@ -93,7 +94,7 @@ def stop_conflicting_vicaya_processes() -> None:
     for pattern in CONFLICTING_PROCESS_PATTERNS:
         subprocess.run(["pkill", "-f", pattern], cwd=PROJECT_ROOT, check=False)
 
-    time.sleep(0.8)
+    time.sleep(PROCESS_CLEANUP_SETTLE_SECONDS)
 
 
 def daemon_running() -> bool:

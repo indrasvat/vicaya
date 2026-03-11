@@ -100,7 +100,7 @@ The `docs/ARCHITECTURE.md` file contains comprehensive documentation of vicaya's
 
 ## Shared Learnings
 
-The [`docs/LEARNINGS.md`](/Users/indrasvat/code/github.com/indrasvat-vicaya/docs/LEARNINGS.md) file is a living execution log for agent work. Keep it updated whenever new debugging, automation, runtime, CI, or workflow learnings are discovered so later issue tasks do not repeat the same mistakes.
+The [`docs/LEARNINGS.md`](docs/LEARNINGS.md) file is a living execution log for agent work. Keep it updated whenever new debugging, automation, runtime, CI, or workflow learnings are discovered so later issue tasks do not repeat the same mistakes.
 
 ## Pre-push Hook
 
