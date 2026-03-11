@@ -5,13 +5,13 @@ index_roots = ["~"]
 
 # Paths to exclude from indexing
 exclusions = [
-    "/System",
-    "/Library",
-    "/.git",
-    "/node_modules",
-    "/target",
-    "/.cargo",
-    "/.rustup",
+    "System",
+    "Library",
+    ".git",
+    "node_modules",
+    "target",
+    ".cargo",
+    ".rustup",
 ]
 
 # Path to store the index data

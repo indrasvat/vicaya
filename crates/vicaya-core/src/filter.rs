@@ -2,6 +2,11 @@
 
 use std::path::Path;
 
+/// Normalize exclusion patterns to the component-oriented matching model.
+pub fn normalize_exclusion(exclusion: &str) -> &str {
+    exclusion.trim_start_matches('/')
+}
+
 /// Return `true` if a path should be indexed given the configured exclusions.
 ///
 /// Exclusions are matched against individual path components. Supports:
@@ -11,6 +16,7 @@ use std::path::Path;
 ///   - `prefix*` (prefix match)
 pub fn should_index_path(path: &Path, exclusions: &[String]) -> bool {
     for exclusion in exclusions {
+        let exclusion = normalize_exclusion(exclusion);
         for component in path.components() {
             if matches!(component, std::path::Component::RootDir) {
                 continue;
@@ -28,7 +34,7 @@ pub fn should_index_path(path: &Path, exclusions: &[String]) -> bool {
                         return false;
                     }
                 }
-            } else if component_str == exclusion.as_str() {
+            } else if component_str == exclusion {
                 return false;
             }
         }
