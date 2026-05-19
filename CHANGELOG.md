@@ -1,3 +1,11 @@
+## [1.2.2](https://github.com/indrasvat/vicaya/compare/v1.2.1...v1.2.2) (2026-05-19)
+
+
+### Bug Fixes
+
+* **release:** support workspace version inheritance ([8bb0ea6](https://github.com/indrasvat/vicaya/commit/8bb0ea632c5a2e9fc01504839fb997895f29a9d7))
+* **release:** use release pr workflow ([b868bdb](https://github.com/indrasvat/vicaya/commit/b868bdbbb1567def7ec22fd78dd9e934ea14f164))
+
 ## [1.2.1](https://github.com/indrasvat/vicaya/compare/v1.2.0...v1.2.1) (2026-05-19)
 
 
@@ -11,14 +19,6 @@
 ### Features
 
 * **scope:** release startup and explicit scoped search ([472fd6c](https://github.com/indrasvat/vicaya/commit/472fd6cf988b38807d8619a0399175dca5720933))
-
-## [1.2.2](https://github.com/indrasvat/vicaya/compare/v1.2.1...v1.2.2) (2026-05-19)
-
-
-### Bug Fixes
-
-* **release:** support workspace version inheritance ([8bb0ea6](https://github.com/indrasvat/vicaya/commit/8bb0ea632c5a2e9fc01504839fb997895f29a9d7))
-* **release:** use release pr workflow ([b868bdb](https://github.com/indrasvat/vicaya/commit/b868bdbbb1567def7ec22fd78dd9e934ea14f164))
 
 ## [1.1.7](https://github.com/indrasvat/vicaya/compare/v1.1.6...v1.1.7) (2026-03-11)
 
