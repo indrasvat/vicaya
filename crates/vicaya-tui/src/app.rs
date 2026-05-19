@@ -1145,3 +1145,407 @@ fn render_search(f: &mut Frame, app: &mut AppState) {
 
     ui::footer::render(f, chunks[3], app);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{FocusTarget, StyledLine, StyledSegment, TextKind, TextStyle, ViewKind};
+    use ratatui::{backend::TestBackend, Terminal};
+    use vicaya_core::ipc::BuildInfo;
+    use vicaya_index::SearchResult;
+
+    fn search_result(path: &std::path::Path, name: &str, size: u64) -> SearchResult {
+        SearchResult {
+            path: path.to_string_lossy().to_string(),
+            name: name.to_string(),
+            score: 0.92,
+            size,
+            mtime: 1_700_000_000,
+        }
+    }
+
+    fn plain_line(text: &str) -> StyledLine {
+        vec![StyledSegment {
+            text: text.to_string(),
+            style: TextStyle::default(),
+        }]
+    }
+
+    fn meta_line(text: &str) -> StyledLine {
+        vec![StyledSegment {
+            text: text.to_string(),
+            style: TextStyle {
+                kind: TextKind::Meta,
+                ..Default::default()
+            },
+        }]
+    }
+
+    fn buffer_text(app: &mut AppState, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui_render(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn apply_sample_status(app: &mut AppState) {
+        app.daemon_status = Some(crate::client::DaemonStatus {
+            build: BuildInfo {
+                version: "1.2.0".to_string(),
+                git_sha: "abc1234".to_string(),
+                timestamp: "2026-05-19T00:00:00Z".to_string(),
+                target: "aarch64-apple-darwin".to_string(),
+            },
+            indexed_files: 1_234_567,
+            trigram_count: 98_765,
+            arena_size: 4_096,
+            last_updated: 1_700_000_000,
+            reconciling: true,
+        });
+    }
+
+    #[test]
+    fn search_mode_keys_cover_query_focus_preview_and_selection_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("src");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let file = dir.path().join("README.md");
+        std::fs::write(&file, "readme").unwrap();
+
+        let mut app = AppState::new();
+        app.search.set_results(vec![
+            search_result(&subdir, "src", 0),
+            search_result(&file, "README.md", 6),
+        ]);
+        app.ui.viewport_height = 1;
+
+        handle_key_event(&mut app, KeyCode::Char('c'), KeyModifiers::NONE);
+        handle_key_event(&mut app, KeyCode::Char('a'), KeyModifiers::NONE);
+        handle_key_event(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+        handle_key_event(&mut app, KeyCode::Left, KeyModifiers::NONE);
+        handle_key_event(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(app.search.query, "cr");
+
+        handle_key_event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.search.focus, FocusTarget::Results);
+        handle_key_event(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(app.search.selected_index, 1);
+        handle_key_event(&mut app, KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.search.selected_index, 0);
+        handle_key_event(&mut app, KeyCode::Char('G'), KeyModifiers::SHIFT);
+        assert_eq!(app.search.selected_index, 1);
+        handle_key_event(&mut app, KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(app.search.selected_index, 0);
+
+        handle_key_event(&mut app, KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(app.ksetra.current(), Some(&subdir));
+        assert!(app.search.is_searching);
+        assert!(app.search.results.is_empty());
+
+        app.search
+            .set_results(vec![search_result(&file, "README.md", 6)]);
+        app.search.focus = FocusTarget::Results;
+        handle_key_event(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
+        assert_eq!(app.print_on_exit, Some(file.to_string_lossy().to_string()));
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn global_search_keys_toggle_modes_and_preview_focus_safely() {
+        let mut app = AppState::new();
+        app.search.focus = FocusTarget::Results;
+
+        handle_key_event(&mut app, KeyCode::Char('?'), KeyModifiers::NONE);
+        assert_eq!(app.mode, AppMode::Help);
+        handle_key_event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.mode, AppMode::Search);
+
+        handle_key_event(&mut app, KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert_eq!(app.mode, AppMode::DrishtiSwitcher);
+        handle_key_event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.mode, AppMode::Search);
+
+        handle_key_event(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(app.mode, AppMode::KriyaSuchi);
+        handle_key_event(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(app.mode, AppMode::Search);
+
+        handle_key_event(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.search.focus, FocusTarget::Preview);
+        handle_key_event(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+        assert!(!app.preview.is_visible);
+        assert_eq!(app.search.focus, FocusTarget::Results);
+        handle_key_event(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(app.search.focus, FocusTarget::Input);
+    }
+
+    #[test]
+    fn drishti_switcher_selects_enabled_views_and_reports_disabled_views() {
+        let mut app = AppState::new();
+
+        app.toggle_drishti_switcher();
+        for ch in "sth".chars() {
+            handle_key_event(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        handle_key_event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.view, ViewKind::Sthana);
+        assert_eq!(app.mode, AppMode::Search);
+
+        app.toggle_drishti_switcher();
+        handle_key_event(&mut app, KeyCode::Char('m'), KeyModifiers::NONE);
+        handle_key_event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.view, ViewKind::Sthana);
+        assert_eq!(app.mode, AppMode::Search);
+        assert!(app
+            .error
+            .as_deref()
+            .is_some_and(|msg| msg.contains("coming soon")));
+    }
+
+    #[test]
+    fn kriya_actions_cover_safe_stateful_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected.txt");
+        std::fs::write(&selected, "selected").unwrap();
+
+        let mut app = AppState::new();
+        app.ksetra.push(dir.path().to_path_buf());
+        app.search
+            .set_results(vec![search_result(&selected, "selected.txt", 8)]);
+        app.preview.lines = vec![plain_line("needle"), plain_line("haystack")];
+        app.preview.search_query = "needle".to_string();
+
+        run_kriya_action(&mut app, crate::kriya::KriyaId::TogglePreview);
+        assert!(!app.preview.is_visible);
+        run_kriya_action(&mut app, crate::kriya::KriyaId::ToggleGrouping);
+        assert_eq!(app.ui.grouping.label(), "dir");
+        run_kriya_action(&mut app, crate::kriya::KriyaId::PopKsetra);
+        assert!(app.ksetra.is_global());
+        run_kriya_action(&mut app, crate::kriya::KriyaId::SetKsetra);
+        assert_eq!(app.mode, AppMode::KsetraInput);
+
+        app.mode = AppMode::Search;
+        run_kriya_action(&mut app, crate::kriya::KriyaId::TogglePreviewLineNumbers);
+        assert!(app.preview.show_line_numbers);
+        run_kriya_action(&mut app, crate::kriya::KriyaId::ClearPreviewSearch);
+        assert!(app.preview.search_query.is_empty());
+        app.search
+            .set_results(vec![search_result(&selected, "selected.txt", 8)]);
+        run_kriya_action(&mut app, crate::kriya::KriyaId::PrintPath);
+        assert_eq!(
+            app.print_on_exit,
+            Some(selected.to_string_lossy().to_string())
+        );
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn ksetra_input_validates_completes_and_applies_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = dir.path().join("alpha");
+        let beta = dir.path().join("beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
+
+        let mut app = AppState::new();
+        app.toggle_ksetra_input();
+        for ch in dir.path().join("a").to_string_lossy().chars() {
+            handle_key_event(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        handle_key_event(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.ksetra_input.completions.len(), 1);
+        handle_key_event(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.ksetra_input.input, alpha.to_string_lossy());
+        assert!(app.ksetra_input.completions.is_empty());
+
+        handle_key_event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.mode, AppMode::Search);
+        assert_eq!(app.ksetra.current(), Some(&alpha));
+
+        app.toggle_ksetra_input();
+        for ch in dir.path().join("missing").to_string_lossy().chars() {
+            handle_key_event(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        handle_key_event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.ksetra_input.error.as_deref(), Some("Not a directory"));
+    }
+
+    #[test]
+    fn preview_search_and_scrolling_keep_matches_visible() {
+        let mut app = AppState::new();
+        app.search.focus = FocusTarget::Preview;
+        app.ui.preview_viewport_height = 3;
+        app.preview.lines = vec![
+            meta_line("meta"),
+            plain_line("alpha"),
+            plain_line("beta"),
+            plain_line("gamma needle"),
+            plain_line("delta"),
+            plain_line("needle again"),
+        ];
+        app.preview.content_line_numbers =
+            crate::state::compute_content_line_numbers(&app.preview.lines);
+
+        handle_key_event(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        assert_eq!(app.mode, AppMode::PreviewSearch);
+        for ch in "needle".chars() {
+            handle_key_event(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        handle_key_event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.mode, AppMode::Search);
+        assert_eq!(app.preview.search_query, "needle");
+        assert!(app.preview.scroll > 0);
+
+        let first_scroll = app.preview.scroll;
+        handle_key_event(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(app.preview.scroll >= first_scroll);
+        handle_key_event(&mut app, KeyCode::Char('G'), KeyModifiers::SHIFT);
+        assert_eq!(app.preview.scroll, 3);
+        handle_key_event(&mut app, KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.preview.scroll, 0);
+        handle_key_event(&mut app, KeyCode::Char('l'), KeyModifiers::CONTROL);
+        assert!(app.preview.search_query.is_empty());
+    }
+
+    #[test]
+    fn trigger_search_parses_niyamas_and_scopes_worker_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = AppState::with_startup_scope(Some(dir.path().to_path_buf()));
+        app.search.set_query("main ext:rs type:file".to_string());
+        let (tx, rx) = mpsc::channel();
+        let mut search_id = 0;
+        let mut active_search_id = 0;
+        let mut last = std::time::Instant::now();
+
+        trigger_search(
+            &tx,
+            &mut app,
+            &mut search_id,
+            &mut active_search_id,
+            &mut last,
+        );
+
+        match rx.try_recv().unwrap() {
+            WorkerCommand::Search {
+                id,
+                query,
+                limit,
+                boost_scope,
+                filter_scope,
+                niyamas,
+                ..
+            } => {
+                assert_eq!(id, 1);
+                assert_eq!(query, "main");
+                assert_eq!(limit, 100);
+                assert_eq!(boost_scope.as_deref(), Some(dir.path()));
+                assert_eq!(filter_scope.as_deref(), Some(dir.path()));
+                assert_eq!(niyamas.len(), 2);
+            }
+            _ => panic!("expected search command"),
+        }
+        assert_eq!(search_id, 1);
+        assert_eq!(active_search_id, 1);
+        assert!(app.search.is_searching);
+    }
+
+    #[test]
+    fn render_search_and_overlays_expose_real_tui_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Cargo.toml");
+        std::fs::write(&file, "[package]\nname = \"demo\"\n").unwrap();
+        let mut app = AppState::with_startup_scope(Some(dir.path().to_path_buf()));
+        apply_sample_status(&mut app);
+        app.search.set_query("cargo".to_string());
+        app.search
+            .set_results(vec![search_result(&file, "Cargo.toml", 24)]);
+        app.preview.title = "Cargo.toml".to_string();
+        app.preview.path = Some(file.to_string_lossy().to_string());
+        app.preview.lines = vec![
+            meta_line(file.to_string_lossy().as_ref()),
+            plain_line("name = demo"),
+        ];
+        app.preview.content_line_numbers =
+            crate::state::compute_content_line_numbers(&app.preview.lines);
+
+        let screen = buffer_text(&mut app, 120, 30);
+        assert!(screen.contains("vicaya"));
+        assert!(screen.contains("prashna: cargo"));
+        assert!(screen.contains("Cargo.toml"));
+        assert!(screen.contains("purvadarshana"));
+
+        app.mode = AppMode::Help;
+        assert!(buffer_text(&mut app, 100, 28).contains("Help"));
+
+        app.mode = AppMode::DrishtiSwitcher;
+        app.ui.drishti_switcher.push_filter_char('s');
+        assert!(buffer_text(&mut app, 100, 28).contains("Sthana"));
+
+        app.mode = AppMode::KriyaSuchi;
+        app.ui.kriya_suchi.push_filter_char('p');
+        let kriya = buffer_text(&mut app, 100, 28);
+        assert!(kriya.contains("Print path") || kriya.contains("purvadarshana"));
+
+        app.mode = AppMode::PreviewSearch;
+        app.preview.start_search();
+        app.preview.insert_search_char('d');
+        assert!(buffer_text(&mut app, 100, 28).contains("preview"));
+
+        app.mode = AppMode::KsetraInput;
+        app.ksetra_input.input = dir.path().to_string_lossy().to_string();
+        app.ksetra_input.cursor = app.ksetra_input.input.len();
+        app.ksetra_input
+            .set_completions(vec![dir.path().to_string_lossy().to_string()]);
+        assert!(buffer_text(&mut app, 100, 28).contains("ksetra"));
+
+        app.mode = AppMode::Confirm(crate::state::Action::Quit);
+        assert!(buffer_text(&mut app, 100, 28).contains("sure"));
+    }
+
+    #[test]
+    fn result_rendering_covers_grouping_scrolling_and_hidden_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let tests = dir.path().join("tests");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&tests).unwrap();
+        let main_rs = src.join("main.rs");
+        let lib_rs = src.join("lib.rs");
+        let smoke_md = tests.join("smoke.md");
+        std::fs::write(&main_rs, "fn main() {}\n").unwrap();
+        std::fs::write(&lib_rs, "pub fn lib() {}\n").unwrap();
+        std::fs::write(&smoke_md, "# smoke\n").unwrap();
+
+        let mut app = AppState::new();
+        app.preview.is_visible = false;
+        app.search.set_query("src ext:rs".to_string());
+        app.search.set_results(vec![
+            search_result(&main_rs, "main.rs", 12),
+            search_result(&lib_rs, "lib.rs", 14),
+            search_result(&smoke_md, "smoke.md", 8),
+        ]);
+        app.search.focus = FocusTarget::Results;
+        app.search.selected_index = 2;
+        app.ui.viewport_height = 2;
+        app.ui.grouping = crate::state::GroupingMode::Directory;
+
+        let directory_screen = buffer_text(&mut app, 90, 16);
+        assert!(directory_screen.contains("src"));
+        assert!(directory_screen.contains("tests"));
+
+        app.ui.grouping = crate::state::GroupingMode::Extension;
+        app.ui.scroll_offset = 0;
+        let extension_screen = buffer_text(&mut app, 90, 16);
+        assert!(extension_screen.contains(".rs"));
+        assert!(extension_screen.contains(".md"));
+        assert!(extension_screen.contains("varga:ext"));
+    }
+}

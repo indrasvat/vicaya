@@ -1054,4 +1054,179 @@ mod tests {
             "overwritten destination should not survive in inode map"
         );
     }
+
+    #[test]
+    fn apply_update_create_modify_delete_and_exclusions_keep_maps_consistent() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let mut state = build_state(root.path(), vicaya_dir.path());
+
+        let file = root.path().join("note.txt");
+        std::fs::write(&file, "one").unwrap();
+        state.apply_update(IndexUpdate::Create {
+            path: file.to_string_lossy().to_string(),
+        });
+        let file_id = state.get_file_id_for_path(&file.to_string_lossy()).unwrap();
+        assert!(state.indexed_file_count() >= 1);
+
+        std::fs::write(&file, "updated").unwrap();
+        state.apply_update(IndexUpdate::Modify {
+            path: file.to_string_lossy().to_string(),
+        });
+        let meta = state.snapshot.file_table.get(file_id).unwrap();
+        assert_eq!(meta.size, 7);
+
+        state.config.exclusions.push("target".to_string());
+        let excluded = root.path().join("target").join("ignored.txt");
+        std::fs::create_dir_all(excluded.parent().unwrap()).unwrap();
+        std::fs::write(&excluded, "ignored").unwrap();
+        state.apply_update(IndexUpdate::Create {
+            path: excluded.to_string_lossy().to_string(),
+        });
+        assert!(state
+            .get_file_id_for_path(&excluded.to_string_lossy())
+            .is_none());
+
+        state.apply_update(IndexUpdate::Delete {
+            path: file.to_string_lossy().to_string(),
+        });
+        assert!(state
+            .get_file_id_for_path(&file.to_string_lossy())
+            .is_none());
+        assert_eq!(state.snapshot.file_table.get(file_id).unwrap().path_len, 0);
+    }
+
+    #[test]
+    fn move_unknown_source_upserts_destination_and_excluded_move_tombstones() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let mut state = build_state(root.path(), vicaya_dir.path());
+
+        let unknown = root.path().join("missing.txt");
+        let created = root.path().join("created.txt");
+        std::fs::write(&created, "created").unwrap();
+        state.apply_update(IndexUpdate::Move {
+            from: unknown.to_string_lossy().to_string(),
+            to: created.to_string_lossy().to_string(),
+        });
+        let created_id = state
+            .get_file_id_for_path(&created.to_string_lossy())
+            .unwrap();
+
+        state.config.exclusions.push("target".to_string());
+        let excluded = root.path().join("target").join("created.txt");
+        std::fs::create_dir_all(excluded.parent().unwrap()).unwrap();
+        std::fs::rename(&created, &excluded).unwrap();
+        state.apply_update(IndexUpdate::Move {
+            from: created.to_string_lossy().to_string(),
+            to: excluded.to_string_lossy().to_string(),
+        });
+
+        assert!(state
+            .get_file_id_for_path(&created.to_string_lossy())
+            .is_none());
+        assert!(state
+            .get_file_id_for_path(&excluded.to_string_lossy())
+            .is_none());
+        assert_eq!(
+            state.snapshot.file_table.get(created_id).unwrap().path_len,
+            0
+        );
+    }
+
+    #[test]
+    fn journal_replay_skips_bad_lines_and_truncate_resets_file() {
+        let dir = tempdir().unwrap();
+        let journal = dir.path().join("index.journal");
+        let first = IndexUpdate::Create {
+            path: "/tmp/one.txt".to_string(),
+        };
+        let second = IndexUpdate::Delete {
+            path: "/tmp/two.txt".to_string(),
+        };
+        let first_line = serde_json::to_string(&first).unwrap();
+        let offset = first_line.len() as u64 + 1;
+        std::fs::write(
+            &journal,
+            format!(
+                "{first_line}\nnot-json\n{}\n\n",
+                serde_json::to_string(&second).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let mut applied = Vec::new();
+        let count = apply_journal_from_offset(&journal, offset, |update| applied.push(update));
+        assert_eq!(count, 1);
+        assert!(matches!(applied[0], IndexUpdate::Delete { .. }));
+
+        truncate_journal(&journal).unwrap();
+        assert_eq!(std::fs::metadata(&journal).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn ipc_server_handle_request_covers_status_search_rebuild_and_shutdown() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let cargo = root.path().join("Cargo.toml");
+        std::fs::write(&cargo, "[package]\n").unwrap();
+
+        let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let journal_lock = Arc::new(Mutex::new(()));
+        let rebuild_lock = Arc::new(Mutex::new(()));
+        let socket = vicaya_dir.path().join("daemon.sock");
+        let server =
+            IpcServer::new(&socket, state, shutdown.clone(), journal_lock, rebuild_lock).unwrap();
+
+        match server.handle_request(Request::Status) {
+            Response::Status {
+                indexed_files,
+                trigram_count,
+                ..
+            } => {
+                assert!(indexed_files >= 1);
+                assert!(trigram_count > 0);
+            }
+            other => panic!("unexpected status response: {other:?}"),
+        }
+
+        match server.handle_request(Request::Search {
+            query: "Cargo".to_string(),
+            limit: 10,
+            scope: Some(root.path().to_string_lossy().to_string()),
+            filter_scope: Some(root.path().to_string_lossy().to_string()),
+            recent_if_empty: false,
+        }) {
+            Response::SearchResults { results } => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].path, cargo.to_string_lossy());
+            }
+            other => panic!("unexpected search response: {other:?}"),
+        }
+
+        match server.handle_request(Request::Search {
+            query: String::new(),
+            limit: 10,
+            scope: None,
+            filter_scope: Some(root.path().to_string_lossy().to_string()),
+            recent_if_empty: true,
+        }) {
+            Response::SearchResults { results } => {
+                assert!(results.iter().any(|r| r.path == cargo.to_string_lossy()))
+            }
+            other => panic!("unexpected recent response: {other:?}"),
+        }
+
+        match server.handle_request(Request::Rebuild { dry_run: true }) {
+            Response::RebuildComplete { files_indexed } => assert!(files_indexed >= 1),
+            other => panic!("unexpected rebuild response: {other:?}"),
+        }
+
+        assert!(matches!(
+            server.handle_request(Request::Shutdown),
+            Response::Ok
+        ));
+        assert!(shutdown.load(Ordering::Relaxed));
+    }
 }

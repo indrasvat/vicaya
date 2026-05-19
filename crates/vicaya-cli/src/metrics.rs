@@ -1448,6 +1448,107 @@ fn format_us(us: u64) -> String {
 mod tests {
     use super::*;
 
+    fn build_info() -> BuildInfo {
+        BuildInfo {
+            version: "1.2.0".to_string(),
+            git_sha: "abc1234".to_string(),
+            timestamp: "2026-05-19T00:00:00Z".to_string(),
+            target: "aarch64-apple-darwin".to_string(),
+        }
+    }
+
+    fn file_snapshot(path: &str, exists: bool, size_bytes: u64) -> FileSnapshot {
+        FileSnapshot {
+            path: path.to_string(),
+            exists,
+            size_bytes,
+            modified_unix_ms: Some(1_700_000_000_000),
+        }
+    }
+
+    fn rich_snapshot() -> MetricsSnapshot {
+        let index = IndexSnapshot {
+            files: 100,
+            trigrams: 2_000,
+            arena_bytes: 10_000,
+            index_allocated_bytes: 20_000,
+            state_allocated_bytes: 30_000,
+            last_updated: 1_700_000_000,
+            reconciling: true,
+        };
+        let process = ProcessSnapshot {
+            pid: 42,
+            ps: PsSnapshot {
+                captured: true,
+                command: "ps -p 42 -o rss= -o etime=".to_string(),
+                ok: true,
+                error: None,
+                rss_bytes: Some(64 * 1024 * 1024),
+                etime: Some("00:01".to_string()),
+            },
+            vmmap: VmmapSnapshot {
+                captured: true,
+                command: "vmmap -summary 42".to_string(),
+                ok: true,
+                error: None,
+                physical_footprint_bytes: Some(128 * 1024 * 1024),
+                physical_footprint_peak_bytes: Some(256 * 1024 * 1024),
+                total: Some(VmmapTotals {
+                    virtual_bytes: 512 * 1024 * 1024,
+                    resident_bytes: 128 * 1024 * 1024,
+                    dirty_bytes: 64 * 1024 * 1024,
+                    swapped_bytes: 4 * 1024 * 1024,
+                    volatile_bytes: 0,
+                    nonvol_bytes: 0,
+                    empty_bytes: 0,
+                    region_count: 200,
+                }),
+                malloc_zone_total: Some(VmmapMallocTotals {
+                    virtual_bytes: 64 * 1024 * 1024,
+                    resident_bytes: 32 * 1024 * 1024,
+                    dirty_bytes: 32 * 1024 * 1024,
+                    swapped_bytes: 0,
+                    allocation_count: 10_000,
+                    allocated_bytes: 24 * 1024 * 1024,
+                    frag_bytes: 8 * 1024 * 1024,
+                    frag_pct: 25.0,
+                    region_count: 10,
+                }),
+            },
+        };
+        let derived = derive_metrics(Some(&index), Some(&process));
+
+        MetricsSnapshot {
+            schema_version: 1,
+            tick: Some(7),
+            captured_at_unix_ms: 1_700_000_000_000,
+            captured_at_rfc3339: "2026-05-19T00:00:00.000Z".to_string(),
+            client: ClientSnapshot {
+                build: build_info(),
+                cwd: Some("/tmp/repo".to_string()),
+                args: vec!["vicaya".to_string(), "metrics".to_string()],
+            },
+            daemon: DaemonSnapshot {
+                running: true,
+                pid: Some(42),
+                pid_file: "/tmp/vicaya/daemon.pid".to_string(),
+                socket_path: "/tmp/vicaya/daemon.sock".to_string(),
+                build: Some(build_info()),
+                connect_error: None,
+            },
+            index: Some(index),
+            disk: DiskSnapshot {
+                config_path: "/tmp/vicaya/config.toml".to_string(),
+                index_dir: "/tmp/vicaya/index".to_string(),
+                index_file: file_snapshot("/tmp/vicaya/index/index.bin", true, 99_000),
+                journal_file: file_snapshot("/tmp/vicaya/index/index.journal", true, 1_024),
+            },
+            process: Some(process),
+            derived,
+            notes: vec!["sample".to_string()],
+        }
+    }
+
     #[test]
     fn parses_vmmap_sizes() {
         assert_eq!(parse_vmmap_size_to_bytes("0K"), Some(0));
@@ -1526,5 +1627,198 @@ TOTAL                             950.0M      2464K      2464K         0K      1
         assert_eq!(parse_duration("2s"), Some(Duration::from_secs(2)));
         assert_eq!(parse_duration("3m"), Some(Duration::from_secs(180)));
         assert_eq!(parse_duration("5"), Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn pretty_snapshot_covers_running_and_degraded_metrics_paths() {
+        let rich = rich_snapshot();
+        print_pretty_snapshot(&rich, true);
+        print_pretty_snapshot(&rich, false);
+
+        let degraded = MetricsSnapshot {
+            schema_version: 1,
+            tick: None,
+            captured_at_unix_ms: 1_700_000_000_000,
+            captured_at_rfc3339: "2026-05-19T00:00:00.000Z".to_string(),
+            client: ClientSnapshot {
+                build: build_info(),
+                cwd: None,
+                args: Vec::new(),
+            },
+            daemon: DaemonSnapshot {
+                running: false,
+                pid: None,
+                pid_file: "/tmp/vicaya/daemon.pid".to_string(),
+                socket_path: "/tmp/vicaya/daemon.sock".to_string(),
+                build: None,
+                connect_error: Some("Daemon not running".to_string()),
+            },
+            index: None,
+            disk: DiskSnapshot {
+                config_path: "/tmp/vicaya/config.toml".to_string(),
+                index_dir: "/tmp/vicaya/index".to_string(),
+                index_file: file_snapshot("/tmp/vicaya/index/index.bin", false, 0),
+                journal_file: file_snapshot("/tmp/vicaya/index/index.journal", false, 0),
+            },
+            process: None,
+            derived: DerivedSnapshot::default(),
+            notes: vec!["Daemon is not running".to_string()],
+        };
+
+        print_pretty_snapshot(&degraded, true);
+    }
+
+    #[test]
+    fn snapshot_collection_handles_absent_daemon_without_failing() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let old_vicaya_dir = std::env::var_os("VICAYA_DIR");
+        std::env::set_var("VICAYA_DIR", dir.path());
+
+        let ctx = build_snapshot_context().unwrap();
+        let snapshot = collect_snapshot(
+            SnapshotMode::OneShot {
+                include_vmmap: false,
+            },
+            &ctx,
+        )
+        .unwrap();
+
+        assert!(!snapshot.daemon.running);
+        assert!(snapshot.index.is_none());
+        assert!(snapshot
+            .notes
+            .iter()
+            .any(|note| note.contains("Daemon is not running")));
+
+        match old_vicaya_dir {
+            Some(value) => std::env::set_var("VICAYA_DIR", value),
+            None => std::env::remove_var("VICAYA_DIR"),
+        }
+    }
+
+    #[test]
+    fn formatting_and_summary_helpers_handle_edges() {
+        assert_eq!(fit_value_right("abc", 6), "   abc");
+        assert_eq!(fit_value_right("abcdef", 4), "...f");
+        assert_eq!(fit_value_right("abcdef", 3), "...");
+        assert_eq!(fit_value_right("abc", 0), "");
+        assert_eq!(format_bytes_mb(512 * 1024), "0.5 MB");
+        assert_eq!(format_bytes_mb(2 * 1024 * 1024 * 1024), "2.00 GB");
+        assert_eq!(format_us(999), "999µs");
+        assert_eq!(format_us(12_300), "12.3ms");
+        assert_eq!(format_us(2_500_000), "2.5s");
+
+        let samples = vec![10, 20, 30, 40, 50];
+        let summary = summarize_latencies(&samples, 5, 1, Duration::from_millis(250));
+        assert_eq!(summary.ok_runs, 5);
+        assert_eq!(summary.error_runs, 1);
+        assert_eq!(summary.min_us, 10);
+        assert_eq!(summary.p50_us, 30);
+        assert_eq!(summary.max_us, 50);
+        assert_eq!(summary.mean_us, 30);
+        assert_eq!(summary.total_time_ms, 250);
+        assert!(summary.qps > 0.0);
+
+        let empty = summarize_latencies(&[], 0, 3, Duration::ZERO);
+        assert_eq!(empty.min_us, 0);
+        assert_eq!(empty.p99_us, 0);
+        assert_eq!(empty.qps, 0.0);
+        assert_eq!(percentile(&samples, -10.0), 10);
+        assert_eq!(percentile(&samples, 110.0), 50);
+    }
+
+    #[test]
+    fn load_queries_ignores_comments_and_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queries.txt");
+        std::fs::write(&path, "\n# comment\nCargo.toml\n\nREADME.md\n").unwrap();
+
+        assert_eq!(
+            load_queries(&path).unwrap(),
+            vec!["Cargo.toml".to_string(), "README.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn process_collectors_return_structured_failures_for_missing_processes() {
+        let ps = collect_ps(-1);
+        assert!(ps.captured);
+        assert!(!ps.ok);
+        assert!(ps.error.is_some());
+
+        let process = collect_process(-1, false);
+        assert_eq!(process.pid, -1);
+        assert!(!process.vmmap.captured);
+    }
+
+    #[test]
+    fn watch_metrics_supports_bounded_jsonl_and_rejects_bad_interval() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let old_vicaya_dir = std::env::var_os("VICAYA_DIR");
+        std::env::set_var("VICAYA_DIR", dir.path());
+
+        watch_metrics(MetricsWatchArgs {
+            format: "jsonl".to_string(),
+            interval: "1ms".to_string(),
+            count: Some(1),
+            vmmap_every: 0,
+        })
+        .unwrap();
+
+        let err = watch_metrics(MetricsWatchArgs {
+            format: "jsonl".to_string(),
+            interval: "nope".to_string(),
+            count: Some(1),
+            vmmap_every: 0,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid --interval"));
+
+        match old_vicaya_dir {
+            Some(value) => std::env::set_var("VICAYA_DIR", value),
+            None => std::env::remove_var("VICAYA_DIR"),
+        }
+    }
+
+    #[test]
+    fn bench_metrics_reports_empty_queries_and_absent_daemon_cleanly() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let vicaya_dir = tempfile::tempdir().unwrap();
+        let queries_dir = tempfile::tempdir().unwrap();
+        let old_vicaya_dir = std::env::var_os("VICAYA_DIR");
+        std::env::set_var("VICAYA_DIR", vicaya_dir.path());
+
+        let empty = queries_dir.path().join("empty.txt");
+        std::fs::write(&empty, "\n# no queries\n").unwrap();
+        let err = bench_metrics(MetricsBenchArgs {
+            format: "json".to_string(),
+            queries: empty,
+            runs: 1,
+            warmup: 0,
+            limit: 5,
+            vmmap_before_after: false,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("No queries found"));
+
+        let queries = queries_dir.path().join("queries.txt");
+        std::fs::write(&queries, "Cargo.toml\n").unwrap();
+        let err = bench_metrics(MetricsBenchArgs {
+            format: "pretty".to_string(),
+            queries,
+            runs: 1,
+            warmup: 0,
+            limit: 5,
+            vmmap_before_after: true,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("Daemon is not running"));
+
+        match old_vicaya_dir {
+            Some(value) => std::env::set_var("VICAYA_DIR", value),
+            None => std::env::remove_var("VICAYA_DIR"),
+        }
     }
 }

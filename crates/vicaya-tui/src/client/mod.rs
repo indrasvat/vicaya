@@ -174,3 +174,150 @@ pub struct DaemonStatus {
     pub last_updated: i64,
     pub reconciling: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use vicaya_core::ipc::BuildInfo;
+
+    fn response_server(
+        dir: &std::path::Path,
+        response: Response,
+    ) -> std::thread::JoinHandle<Request> {
+        let socket = dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let line = vicaya_core::ipc::read_message(&mut reader)
+                .unwrap()
+                .unwrap();
+            let request = Request::from_json(&line).unwrap();
+            let mut json = response.to_json().unwrap();
+            json.push('\n');
+            stream.write_all(json.as_bytes()).unwrap();
+            request
+        })
+    }
+
+    fn build_info() -> BuildInfo {
+        BuildInfo {
+            version: "1.2.0".to_string(),
+            git_sha: "abc1234".to_string(),
+            timestamp: "2026-05-19T00:00:00Z".to_string(),
+            target: "aarch64-apple-darwin".to_string(),
+        }
+    }
+
+    #[test]
+    fn search_serializes_scope_and_maps_results() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", dir.path());
+        let response = Response::SearchResults {
+            results: vec![vicaya_core::ipc::SearchResult {
+                path: "/tmp/repo/Cargo.toml".to_string(),
+                name: "Cargo.toml".to_string(),
+                score: 0.9,
+                size: 123,
+                mtime: 1_700_000_000,
+            }],
+        };
+        let handle = response_server(dir.path(), response);
+
+        let mut client = IpcClient::new();
+        assert!(client.is_connected());
+        let results = client
+            .search(
+                "Cargo",
+                5,
+                Some(std::path::Path::new("/tmp/repo")),
+                Some(std::path::Path::new("/tmp/repo/src")),
+                false,
+            )
+            .unwrap();
+
+        let request = handle.join().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Cargo.toml");
+        match request {
+            Request::Search {
+                query,
+                limit,
+                scope,
+                filter_scope,
+                recent_if_empty,
+            } => {
+                assert_eq!(query, "Cargo");
+                assert_eq!(limit, 5);
+                assert_eq!(scope.as_deref(), Some("/tmp/repo"));
+                assert_eq!(filter_scope.as_deref(), Some("/tmp/repo/src"));
+                assert!(!recent_if_empty);
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_non_recent_search_returns_without_ipc() {
+        let mut client = IpcClient { stream: None };
+        let results = client.search("", 10, None, None, false).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn status_and_rebuild_map_daemon_responses() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", dir.path());
+        let status_response = Response::Status {
+            pid: 99,
+            build: build_info(),
+            indexed_files: 42,
+            trigram_count: 777,
+            arena_size: 4096,
+            index_allocated_bytes: 8192,
+            state_allocated_bytes: 16384,
+            last_updated: 1_700_000_000,
+            reconciling: true,
+        };
+        let handle = response_server(dir.path(), status_response);
+        let mut client = IpcClient::new();
+        let status = client.status().unwrap();
+        let request = handle.join().unwrap();
+        assert!(matches!(request, Request::Status));
+        assert_eq!(status.indexed_files, 42);
+        assert_eq!(status.trigram_count, 777);
+        assert!(status.reconciling);
+
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", dir.path());
+        let handle = response_server(dir.path(), Response::RebuildComplete { files_indexed: 12 });
+        let mut client = IpcClient::new();
+        assert_eq!(client.rebuild(true).unwrap(), 12);
+        assert!(matches!(
+            handle.join().unwrap(),
+            Request::Rebuild { dry_run: true }
+        ));
+    }
+
+    #[test]
+    fn daemon_error_responses_become_client_errors() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", dir.path());
+        let handle = response_server(
+            dir.path(),
+            Response::Error {
+                message: "boom".to_string(),
+            },
+        );
+        let mut client = IpcClient::new();
+        let err = client.search("x", 1, None, None, false).unwrap_err();
+        assert!(err.to_string().contains("boom"));
+        assert!(matches!(handle.join().unwrap(), Request::Search { .. }));
+    }
+}
