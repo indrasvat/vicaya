@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/indrasvat/vicaya/compare/v1.2.0...v1.2.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* **ci:** restore codecov uploads ([9a9f69a](https://github.com/indrasvat/vicaya/commit/9a9f69aec26b811bcd58d764799b451ada378d6e))
+
 # [1.2.0](https://github.com/indrasvat/vicaya/compare/v1.1.7...v1.2.0) (2026-03-11)
 
 
