@@ -34,7 +34,6 @@ comment:
   require_head: true
 
 ignore:
-  - "crates/*/src/main.rs"  # Ignore main entry points
   - "crates/*/tests/**"      # Ignore test code itself
   - "**/*_test.rs"
 
