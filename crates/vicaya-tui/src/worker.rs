@@ -544,7 +544,29 @@ fn syntect_style_to_text_style(style: syntect::highlighting::Style) -> TextStyle
 mod tests {
     use super::*;
     use crate::state::{CmpOp, CmpU64};
+    use std::io::{BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use tempfile::tempdir;
+    use vicaya_core::ipc::{BuildInfo, Request, Response};
+
+    fn result(path: &std::path::Path, name: &str, size: u64, mtime: i64) -> SearchResult {
+        SearchResult {
+            path: path.to_string_lossy().to_string(),
+            name: name.to_string(),
+            score: 1.0,
+            size,
+            mtime,
+        }
+    }
+
+    fn test_syntaxes_and_theme() -> (SyntaxSet, ThemeSet) {
+        (
+            SyntaxSet::load_defaults_newlines(),
+            ThemeSet::load_defaults(),
+        )
+    }
 
     #[test]
     fn matches_filters_applies_scope_and_size() {
@@ -628,5 +650,336 @@ mod tests {
             Some(dir.path()),
             &ext_rs
         ));
+    }
+
+    #[test]
+    fn matches_filters_rejects_out_of_scope_path_filters_and_mtime() {
+        let dir = tempdir().unwrap();
+        let in_scope = dir.path().join("src").join("main.rs");
+        let out_scope = dir.path().join("target").join("main.rs");
+        std::fs::create_dir_all(in_scope.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(out_scope.parent().unwrap()).unwrap();
+        std::fs::write(&in_scope, "fn main() {}\n").unwrap();
+        std::fs::write(&out_scope, "fn main() {}\n").unwrap();
+
+        let niyamas = vec![
+            Niyama::Path {
+                needle: "src".to_string(),
+                raw: "path:src".to_string(),
+            },
+            Niyama::Mtime {
+                cmp: crate::state::CmpI64 {
+                    op: CmpOp::Gte,
+                    value: 100,
+                },
+                raw: "mtime:>=1970-01-01".to_string(),
+            },
+        ];
+
+        assert!(matches_filters(
+            &result(&in_scope, "main.rs", 13, 101),
+            ViewKind::Patra,
+            Some(dir.path()),
+            &niyamas
+        ));
+        assert!(!matches_filters(
+            &result(&out_scope, "main.rs", 13, 101),
+            ViewKind::Patra,
+            Some(dir.path()),
+            &niyamas
+        ));
+        assert!(!matches_filters(
+            &result(&in_scope, "main.rs", 13, 99),
+            ViewKind::Patra,
+            Some(dir.path()),
+            &niyamas
+        ));
+    }
+
+    #[test]
+    fn preview_file_sanitizes_controls_and_assigns_highlight_styles() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "fn main() {\n\tprintln!(\"hi\");\n\u{1b}[31m\n}\n").unwrap();
+        let (syntaxes, themes) = test_syntaxes_and_theme();
+        let theme = pick_theme(&themes);
+
+        let (title, lines, truncated, error) =
+            build_preview(file.to_str().unwrap(), &syntaxes, theme);
+
+        assert_eq!(title, "main.rs");
+        assert!(!truncated);
+        assert!(error.is_none());
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.iter().map(|seg| seg.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("println!"));
+        assert!(rendered.contains("    "));
+        assert!(lines.iter().flatten().any(|seg| seg.style.fg.is_some()));
+    }
+
+    #[test]
+    fn preview_binary_file_is_marked_truncated_without_decoding() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("archive.bin");
+        std::fs::write(&file, b"abc\0def").unwrap();
+        let (syntaxes, themes) = test_syntaxes_and_theme();
+        let theme = pick_theme(&themes);
+
+        let (title, lines, truncated, error) =
+            build_preview(file.to_str().unwrap(), &syntaxes, theme);
+
+        assert_eq!(title, "archive.bin");
+        assert!(truncated);
+        assert!(error.is_none());
+        assert!(lines
+            .iter()
+            .flatten()
+            .any(|seg| seg.text.contains("binary file preview")));
+    }
+
+    #[test]
+    fn preview_directory_lists_entries_and_marks_directories() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("README.md"), "readme").unwrap();
+        let (syntaxes, themes) = test_syntaxes_and_theme();
+        let theme = pick_theme(&themes);
+
+        let (_title, lines, truncated, error) =
+            build_preview(dir.path().to_str().unwrap(), &syntaxes, theme);
+
+        assert!(!truncated);
+        assert!(error.is_none());
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.iter().map(|seg| seg.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("README.md"));
+        assert!(rendered.contains("src/"));
+    }
+
+    #[test]
+    fn preview_directory_truncates_large_listing() {
+        let dir = tempdir().unwrap();
+        for i in 0..205 {
+            std::fs::write(dir.path().join(format!("file-{i:03}.txt")), "").unwrap();
+        }
+        let (syntaxes, themes) = test_syntaxes_and_theme();
+        let theme = pick_theme(&themes);
+
+        let (_title, lines, truncated, error) =
+            build_preview(dir.path().to_str().unwrap(), &syntaxes, theme);
+
+        assert!(truncated);
+        assert!(error.is_none());
+        assert!(lines
+            .iter()
+            .flatten()
+            .any(|seg| seg.text.contains("showing first 200 entries")));
+    }
+
+    #[test]
+    fn preview_missing_path_returns_error_line() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing.txt");
+        let (syntaxes, themes) = test_syntaxes_and_theme();
+        let theme = pick_theme(&themes);
+
+        let (_title, lines, truncated, error) =
+            build_preview(missing.to_str().unwrap(), &syntaxes, theme);
+
+        assert!(!truncated);
+        assert!(error.is_some());
+        assert!(lines.iter().flatten().any(|seg| {
+            seg.style.kind == TextKind::Error && seg.text.contains("unable to read metadata")
+        }));
+    }
+
+    fn start_fake_daemon(
+        vicaya_dir: &std::path::Path,
+        stop: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<Vec<Request>> {
+        let socket = vicaya_dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+
+        std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        let line = vicaya_core::ipc::read_message(&mut reader)
+                            .unwrap()
+                            .unwrap();
+                        let request = Request::from_json(&line).unwrap();
+                        let response = match &request {
+                            Request::Status => Response::Status {
+                                pid: 77,
+                                build: BuildInfo {
+                                    version: "1.2.0".to_string(),
+                                    git_sha: "abc1234".to_string(),
+                                    timestamp: "2026-05-19T00:00:00Z".to_string(),
+                                    target: "aarch64-apple-darwin".to_string(),
+                                },
+                                indexed_files: 3,
+                                trigram_count: 9,
+                                arena_size: 128,
+                                index_allocated_bytes: 256,
+                                state_allocated_bytes: 512,
+                                last_updated: 1_700_000_000,
+                                reconciling: false,
+                            },
+                            Request::Search { .. } => Response::SearchResults {
+                                results: vec![
+                                    vicaya_core::ipc::SearchResult {
+                                        path: "/tmp/repo/src/main.rs".to_string(),
+                                        name: "main.rs".to_string(),
+                                        score: 1.0,
+                                        size: 12,
+                                        mtime: 1_700_000_000,
+                                    },
+                                    vicaya_core::ipc::SearchResult {
+                                        path: "/tmp/repo/target/main.rs".to_string(),
+                                        name: "main.rs".to_string(),
+                                        score: 0.5,
+                                        size: 12,
+                                        mtime: 1_700_000_000,
+                                    },
+                                ],
+                            },
+                            _ => Response::Ok,
+                        };
+                        requests.push(request);
+                        let mut json = response.to_json().unwrap();
+                        json.push('\n');
+                        stream.write_all(json.as_bytes()).unwrap();
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+            requests
+        })
+    }
+
+    #[test]
+    fn worker_loop_coalesces_searches_reports_status_and_builds_preview() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let vicaya_dir = tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", vicaya_dir.path());
+        let stop = Arc::new(AtomicBool::new(false));
+        let fake_daemon = start_fake_daemon(vicaya_dir.path(), stop.clone());
+
+        let preview_dir = tempdir().unwrap();
+        let preview_file = preview_dir.path().join("main.rs");
+        std::fs::write(&preview_file, "fn main() {}\n").unwrap();
+
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let (evt_tx, evt_rx) = std::sync::mpsc::channel();
+
+        cmd_tx
+            .send(WorkerCommand::Search {
+                id: 1,
+                query: "stale".to_string(),
+                limit: 10,
+                view: ViewKind::Patra,
+                boost_scope: Some(std::path::PathBuf::from("/tmp/repo")),
+                filter_scope: Some(std::path::PathBuf::from("/tmp/repo/src")),
+                niyamas: Vec::new(),
+            })
+            .unwrap();
+        cmd_tx
+            .send(WorkerCommand::Search {
+                id: 2,
+                query: "main".to_string(),
+                limit: 10,
+                view: ViewKind::Patra,
+                boost_scope: Some(std::path::PathBuf::from("/tmp/repo")),
+                filter_scope: Some(std::path::PathBuf::from("/tmp/repo/src")),
+                niyamas: vec![Niyama::Path {
+                    needle: "src".to_string(),
+                    raw: "path:src".to_string(),
+                }],
+            })
+            .unwrap();
+        cmd_tx
+            .send(WorkerCommand::Preview {
+                id: 9,
+                path: preview_file.to_string_lossy().to_string(),
+            })
+            .unwrap();
+
+        let worker = start_worker(cmd_rx, evt_tx);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut saw_status = false;
+        let mut saw_search = false;
+        let mut saw_preview = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(event) = evt_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                match event {
+                    WorkerEvent::Status { status } => {
+                        saw_status = status
+                            .as_ref()
+                            .is_some_and(|status| status.indexed_files == 3);
+                    }
+                    WorkerEvent::SearchResults { id, results, error } => {
+                        if id == 2 {
+                            assert!(error.is_none());
+                            assert_eq!(results.len(), 1);
+                            assert!(results[0].path.contains("/src/"));
+                            saw_search = true;
+                        }
+                    }
+                    WorkerEvent::PreviewReady {
+                        id,
+                        title,
+                        lines,
+                        truncated,
+                        ..
+                    } => {
+                        if id == 9 {
+                            assert_eq!(title, "main.rs");
+                            assert!(!truncated);
+                            let rendered = lines
+                                .iter()
+                                .flatten()
+                                .map(|seg| seg.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join("");
+                            assert!(rendered.contains("main"));
+                            saw_preview = true;
+                        }
+                    }
+                }
+            }
+            if saw_status && saw_search && saw_preview {
+                break;
+            }
+        }
+
+        cmd_tx.send(WorkerCommand::Quit).unwrap();
+        worker.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        let requests = fake_daemon.join().unwrap();
+
+        assert!(saw_status, "worker did not report daemon status");
+        assert!(saw_search, "worker did not report latest search results");
+        assert!(saw_preview, "worker did not report preview");
+        assert!(requests.iter().any(|req| matches!(req, Request::Status)));
+        assert!(requests
+            .iter()
+            .any(|req| { matches!(req, Request::Search { query, .. } if query == "main") }));
+        assert!(!requests
+            .iter()
+            .any(|req| { matches!(req, Request::Search { query, .. } if query == "stale") }));
     }
 }

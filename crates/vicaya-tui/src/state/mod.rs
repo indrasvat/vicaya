@@ -1629,4 +1629,137 @@ mod tests {
         assert_eq!(preview.search_input, "a");
         assert_eq!(preview.search_cursor, 0);
     }
+
+    #[test]
+    fn ui_scroll_keeps_selection_visible_and_clamped() {
+        let mut ui = UiState::new();
+        ui.viewport_height = 3;
+
+        ui.update_scroll(0, 10);
+        assert_eq!(ui.scroll_offset, 0);
+        ui.update_scroll(4, 10);
+        assert_eq!(ui.scroll_offset, 2);
+        ui.update_scroll(1, 10);
+        assert_eq!(ui.scroll_offset, 1);
+        ui.update_scroll(99, 5);
+        assert_eq!(ui.scroll_offset, 2);
+    }
+
+    #[test]
+    fn grouping_and_view_metadata_are_stable() {
+        assert_eq!(GroupingMode::None.label(), "none");
+        assert_eq!(GroupingMode::None.next(), GroupingMode::Directory);
+        assert_eq!(GroupingMode::Directory.next(), GroupingMode::Extension);
+        assert_eq!(GroupingMode::Extension.next(), GroupingMode::None);
+
+        let labels: Vec<&str> = ViewKind::ALL.iter().map(|v| v.label()).collect();
+        assert!(labels.contains(&"Patra"));
+        assert!(labels.contains(&"Sthana"));
+        assert!(labels.contains(&"Ankita"));
+        assert_eq!(ViewKind::Patra.english_hint(), "Files");
+        assert!(ViewKind::Patra.is_enabled());
+        assert!(ViewKind::Sthana.is_enabled());
+        assert!(!ViewKind::Smriti.is_enabled());
+    }
+
+    #[test]
+    fn switcher_states_filter_reset_and_wrap_selection() {
+        let mut drishti = DrishtiSwitcherState::new();
+        drishti.push_filter_char('d');
+        assert!(drishti.matching_views().contains(&ViewKind::Sthana));
+        drishti.select_previous();
+        assert!(drishti.selected_view().is_some());
+        drishti.pop_filter_char();
+        assert_eq!(drishti.filter_query(), "");
+        drishti.reset();
+        assert_eq!(drishti.selected_index, 0);
+
+        let mut kriya = KriyaSuchiState::new();
+        kriya.select_previous(3);
+        assert_eq!(kriya.selected_index, 2);
+        kriya.select_next(3);
+        assert_eq!(kriya.selected_index, 0);
+        kriya.push_filter_char('p');
+        assert_eq!(kriya.filter_query(), "p");
+        kriya.pop_filter_char();
+        kriya.select_next(0);
+        assert_eq!(kriya.selected_index, 0);
+        kriya.reset();
+        assert_eq!(kriya.filter_query(), "");
+    }
+
+    #[test]
+    fn ksetra_input_cursor_completion_and_error_state_are_consistent() {
+        let mut input = KsetraInputState::new();
+        input.push_char('a');
+        input.push_char('é');
+        input.push_char('b');
+        assert_eq!(input.input, "aéb");
+
+        input.move_cursor_left();
+        input.delete_char();
+        assert_eq!(input.input, "aé");
+        input.error = Some("old".to_string());
+        input.pop_char();
+        assert_eq!(input.input, "a");
+        assert!(input.error.is_none());
+        input.move_cursor_start();
+        input.push_char('z');
+        assert_eq!(input.input, "za");
+        input.move_cursor_end();
+        assert_eq!(input.cursor, input.input.len());
+
+        input.set_completions(vec![
+            "/tmp/a".to_string(),
+            "/tmp/b".to_string(),
+            "/tmp/c".to_string(),
+        ]);
+        input.select_previous_completion();
+        assert_eq!(input.selected_completion, 2);
+        input.select_next_completion();
+        assert_eq!(input.selected_completion, 0);
+        input.select_next_completion();
+        input.apply_completion();
+        assert_eq!(input.input, "/tmp/b");
+        assert!(input.completions.is_empty());
+    }
+
+    #[test]
+    fn preview_state_clear_toggle_and_search_lifecycle() {
+        let mut preview = PreviewState::new();
+        preview.path = Some("/tmp/file.rs".to_string());
+        preview.title = "file.rs".to_string();
+        preview.lines = vec![vec![StyledSegment {
+            text: "needle".to_string(),
+            style: TextStyle::default(),
+        }]];
+        preview.content_line_numbers = vec![Some(1)];
+        preview.scroll = 2;
+        preview.truncated = true;
+        preview.is_loading = true;
+        preview.toggle();
+        assert!(!preview.is_visible);
+        preview.toggle_line_numbers();
+        assert!(preview.show_line_numbers);
+
+        preview.search_query = "old".to_string();
+        preview.start_search();
+        assert_eq!(preview.search_input, "old");
+        preview.insert_search_char('x');
+        preview.cancel_search();
+        assert_eq!(preview.search_input, "old");
+        preview.search_input = "  new  ".to_string();
+        preview.search_cursor = preview.search_input.len();
+        preview.apply_search();
+        assert_eq!(preview.search_query, "new");
+        preview.clear_search();
+        assert!(preview.search_query.is_empty());
+
+        preview.clear();
+        assert!(preview.path.is_none());
+        assert!(preview.lines.is_empty());
+        assert_eq!(preview.scroll, 0);
+        assert!(!preview.is_loading);
+        assert!(!preview.truncated);
+    }
 }
