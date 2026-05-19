@@ -121,6 +121,9 @@ jobs:
         with:
           files: lcov.info
           fail_ci_if_error: true
+          override_branch: ${{ github.head_ref || github.ref_name }}
+          override_commit: ${{ github.event.pull_request.head.sha || github.sha }}
+          slug: ${{ github.repository }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Export coverage summary
