@@ -80,6 +80,7 @@ jobs:
 
             > This is a preview release for testing purposes only.
             > It will be automatically deleted after 7 days.
+          draft: true
           prerelease: true
           files: |
             dist/*.tar.gz

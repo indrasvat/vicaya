@@ -1447,6 +1447,29 @@ fn format_us(us: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     fn build_info() -> BuildInfo {
         BuildInfo {
@@ -1672,8 +1695,7 @@ TOTAL                             950.0M      2464K      2464K         0K      1
     fn snapshot_collection_handles_absent_daemon_without_failing() {
         let _lock = vicaya_core::paths::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let old_vicaya_dir = std::env::var_os("VICAYA_DIR");
-        std::env::set_var("VICAYA_DIR", dir.path());
+        let _vicaya_dir_guard = EnvVarGuard::set_path("VICAYA_DIR", dir.path());
 
         let ctx = build_snapshot_context().unwrap();
         let snapshot = collect_snapshot(
@@ -1690,11 +1712,6 @@ TOTAL                             950.0M      2464K      2464K         0K      1
             .notes
             .iter()
             .any(|note| note.contains("Daemon is not running")));
-
-        match old_vicaya_dir {
-            Some(value) => std::env::set_var("VICAYA_DIR", value),
-            None => std::env::remove_var("VICAYA_DIR"),
-        }
     }
 
     #[test]
@@ -1756,8 +1773,7 @@ TOTAL                             950.0M      2464K      2464K         0K      1
     fn watch_metrics_supports_bounded_jsonl_and_rejects_bad_interval() {
         let _lock = vicaya_core::paths::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let old_vicaya_dir = std::env::var_os("VICAYA_DIR");
-        std::env::set_var("VICAYA_DIR", dir.path());
+        let _vicaya_dir_guard = EnvVarGuard::set_path("VICAYA_DIR", dir.path());
 
         watch_metrics(MetricsWatchArgs {
             format: "jsonl".to_string(),
@@ -1775,11 +1791,6 @@ TOTAL                             950.0M      2464K      2464K         0K      1
         })
         .unwrap_err();
         assert!(err.to_string().contains("Invalid --interval"));
-
-        match old_vicaya_dir {
-            Some(value) => std::env::set_var("VICAYA_DIR", value),
-            None => std::env::remove_var("VICAYA_DIR"),
-        }
     }
 
     #[test]
@@ -1787,8 +1798,7 @@ TOTAL                             950.0M      2464K      2464K         0K      1
         let _lock = vicaya_core::paths::test_env_lock();
         let vicaya_dir = tempfile::tempdir().unwrap();
         let queries_dir = tempfile::tempdir().unwrap();
-        let old_vicaya_dir = std::env::var_os("VICAYA_DIR");
-        std::env::set_var("VICAYA_DIR", vicaya_dir.path());
+        let _vicaya_dir_guard = EnvVarGuard::set_path("VICAYA_DIR", vicaya_dir.path());
 
         let empty = queries_dir.path().join("empty.txt");
         std::fs::write(&empty, "\n# no queries\n").unwrap();
@@ -1815,10 +1825,5 @@ TOTAL                             950.0M      2464K      2464K         0K      1
         })
         .unwrap_err();
         assert!(err.to_string().contains("Daemon is not running"));
-
-        match old_vicaya_dir {
-            Some(value) => std::env::set_var("VICAYA_DIR", value),
-            None => std::env::remove_var("VICAYA_DIR"),
-        }
     }
 }

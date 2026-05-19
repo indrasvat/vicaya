@@ -884,7 +884,6 @@ mod tests {
 
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
         let (evt_tx, evt_rx) = std::sync::mpsc::channel();
-        let worker = start_worker(cmd_rx, evt_tx);
 
         cmd_tx
             .send(WorkerCommand::Search {
@@ -917,6 +916,8 @@ mod tests {
                 path: preview_file.to_string_lossy().to_string(),
             })
             .unwrap();
+
+        let worker = start_worker(cmd_rx, evt_tx);
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut saw_status = false;
