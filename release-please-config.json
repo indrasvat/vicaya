@@ -1,19 +1,21 @@
 {
-  "release-type": "rust",
+  "release-type": "simple",
   "include-v-in-tag": true,
   "include-component-in-tag": false,
   "draft": true,
-  "plugins": [
-    {
-      "type": "cargo-workspace",
-      "merge": false
-    }
-  ],
   "packages": {
     ".": {
+      "release-type": "simple",
       "package-name": "vicaya",
       "component": "vicaya",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "Cargo.toml",
+          "jsonpath": "$.workspace.package.version"
+        }
+      ]
     }
   }
 }
