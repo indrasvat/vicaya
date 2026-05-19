@@ -1,0 +1,19 @@
+{
+  "release-type": "rust",
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "draft": true,
+  "plugins": [
+    {
+      "type": "cargo-workspace",
+      "merge": false
+    }
+  ],
+  "packages": {
+    ".": {
+      "package-name": "vicaya",
+      "component": "vicaya",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

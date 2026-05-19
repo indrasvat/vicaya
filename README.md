@@ -62,6 +62,24 @@ make check            # runs fmt + clippy + tests
 # Individual steps are also available: make fmt | make lint | make test
 ```
 
+### Install Latest Release
+
+```bash
+tmpdir=$(mktemp -d)
+cd "$tmpdir"
+
+curl -fsSLO https://github.com/indrasvat/vicaya/releases/latest/download/vicaya-universal.tar.gz
+curl -fsSLO https://github.com/indrasvat/vicaya/releases/latest/download/vicaya-universal.tar.gz.sha256
+shasum -a 256 -c vicaya-universal.tar.gz.sha256
+
+tar -xzf vicaya-universal.tar.gz
+mkdir -p "$HOME/.cargo/bin"
+install -m 0755 bin/vicaya bin/vicaya-daemon bin/vicaya-tui "$HOME/.cargo/bin/"
+
+vicaya --version
+vicaya-tui --version
+```
+
 ### Run the Stack
 
 ```bash
@@ -219,13 +237,16 @@ make bench
 
 ## Releases
 
-1. Run the **Release Prepare** workflow (from GitHub Actions) or via CLI: `gh workflow run release-prepare.yml -f level=minor -f dry_run=true` for a rehearsal. Once satisfied, rerun with `dry_run=false`. This invokes [`cargo release`](https://github.com/crate-ci/cargo-release) using `release.toml` to bump versions, tag `v<semver>`, and push the metadata.
-2. When the tag lands on `main`, the **Release** workflow builds universal macOS binaries, packages `.pkg` and `.tar.gz` installers, uploads SHA256 sums, and publishes a GitHub Release with auto-generated notes.
-3. Download artifacts from the release page or from CI pull requests (see the `vicaya-universal` and `vicaya-linux-binaries` artifacts) for manual validation.
+Releases are managed by Release Please:
+
+1. After CI succeeds on `main`, the **Release** workflow opens or updates a release PR when conventional commits require a new version. That PR updates `Cargo.toml`, `.release-please-manifest.json`, and `CHANGELOG.md`.
+2. Merge the release PR only after its CI and Codecov upload are green.
+3. After the release PR lands on `main`, CI runs again. When that CI run succeeds, the **Release** workflow creates the `v<semver>` tag, builds the universal macOS tarball, uploads SHA256 sums, and publishes the GitHub Release.
+4. Download and smoke-test the latest release with the commands in [Install Latest Release](#install-latest-release).
 
 Each artifact bundle contains the CLI (`vicaya`), daemon (`vicaya-daemon`), and TUI (`vicaya-tui`) binaries so you can exercise the full stack.
 
-Always run `cargo release <level> --workspace --no-publish --execute --dry-run` locally before firing the workflow.
+For fully automated release PRs, configure a `RELEASE_PLEASE_TOKEN` repository secret backed by a fine-grained PAT or GitHub App token with contents and pull-request write access. The workflow can fall back to `GITHUB_TOKEN`, but GitHub suppresses CI triggers for pull requests created by `GITHUB_TOKEN`, so the dedicated token is the production-safe path.
 
 ### Running Unsigned macOS Artifacts
 

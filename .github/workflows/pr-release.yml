@@ -41,6 +41,9 @@ jobs:
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "tag_name=pr-${PR_NUM}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Set preview version
+        run: ./scripts/set-version.sh "${{ steps.version.outputs.preview_version }}"
+
       - name: Build for arm64
         run: cargo build --workspace --release --target aarch64-apple-darwin
 

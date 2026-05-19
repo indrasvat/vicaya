@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Builds release artifacts for semantic-release
-# Called by semantic-release prepareCmd
+# Builds macOS universal release artifacts for GitHub Releases.
 
 set -euo pipefail
 
