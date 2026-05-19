@@ -28,6 +28,7 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Create or publish release
@@ -55,7 +56,7 @@ jobs:
       - name: Checkout released commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ needs.release-please.outputs.sha || needs.release-please.outputs.tag_name }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
