@@ -2,7 +2,6 @@
 
 mod ipc_server;
 
-use std::io::BufRead;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
@@ -55,11 +54,10 @@ fn main() -> Result<()> {
         snapshot,
     )));
 
-    // Fresh scans are authoritative. Only replay downtime journal entries when we had an
-    // existing on-disk snapshot to reconcile against.
-    if had_index {
-        replay_journal(&state, &journal_file)?;
-    } else {
+    // Fresh scans are authoritative. Existing snapshots become live immediately;
+    // startup reconcile catches downtime changes and truncates any stale journal
+    // after the IPC socket is ready.
+    if !had_index {
         clear_stale_journal(&journal_file)?;
     }
 
@@ -129,49 +127,6 @@ fn load_config() -> Result<Config> {
         config.save(&config_path)?;
         Ok(config)
     }
-}
-
-fn replay_journal(state: &SharedState, journal_file: &Path) -> Result<()> {
-    if !journal_file.exists() {
-        return Ok(());
-    }
-
-    let file = std::fs::File::open(journal_file)?;
-    let mut reader = std::io::BufReader::new(file);
-
-    let mut applied = 0usize;
-    let mut line = String::new();
-
-    let mut state = state.write().unwrap();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(e) => {
-                warn!("Failed to read journal line: {}", e);
-                continue;
-            }
-        }
-
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        match serde_json::from_str::<vicaya_watcher::IndexUpdate>(trimmed) {
-            Ok(update) => {
-                state.apply_update(update);
-                applied += 1;
-            }
-            Err(e) => warn!("Skipping invalid journal entry: {}", e),
-        }
-    }
-
-    if applied > 0 {
-        info!("Replayed {} journal updates", applied);
-    }
-    Ok(())
 }
 
 fn clear_stale_journal(journal_file: &Path) -> Result<()> {
