@@ -6,7 +6,7 @@ use std::time::Duration;
 use vicaya_core::ipc::{Request, Response};
 use vicaya_index::SearchResult;
 
-const IPC_TIMEOUT: Duration = Duration::from_secs(2);
+const IPC_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_ATTEMPTS: usize = 3;
 
 /// IPC client for daemon communication.
