@@ -369,6 +369,7 @@ mod tests {
         Config {
             index_roots: vec![root.to_path_buf()],
             exclusions: vec![],
+            respect_ignore_files: true,
             index_path: vicaya_dir.join("index"),
             max_memory_mb: 128,
             performance: PerformanceConfig {

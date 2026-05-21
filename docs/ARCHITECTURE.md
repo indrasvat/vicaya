@@ -745,9 +745,12 @@ updates. The daily reconciliation resets the journal, bounding its size.
 
 ### Indexing
 
-- Scanner uses `walkdir` for traversal with configurable exclusion patterns
+- Scanner uses the `ignore` crate for traversal, honoring `.gitignore`,
+  `.ignore`, and `.git/info/exclude` by default while preserving configurable
+  exclusion patterns
 - Trigrams are extracted only from basenames, keeping the index compact
-- `rayon` and `ignore` crates are available for parallel scanning
+- `respect_ignore_files = false` disables repository ignore-file handling; this
+  changes index membership and requires a rebuild
 
 ### IPC
 

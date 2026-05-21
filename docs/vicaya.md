@@ -34,12 +34,13 @@ Note: This document began as an implementation plan; many checklists and timelin
 
 ### What We're Building
 
-vicaya (विचय) is a macOS filesystem search engine that locates files and folders by name (and basic metadata) *instantly*, with interactive results as you type. It mirrors the "Everything for Windows" experience but is built for APFS/macOS using Rust, FSEvents, and a highly optimized in-memory + on-disk index.
+vicaya (विचय) is a macOS developer file finder that locates files and folders by filename, path, and basic metadata *instantly*, with interactive results as you type. It mirrors the "Everything for Windows" experience but is terminal-native, Rust-powered, and designed to complement content search tools like `ripgrep`.
 
 ### Key Deliverables
 
 - [x] **Core Indexing Engine**
   - Full-disk initial scan (configurable roots) using a fast, parallel walker.
+  - Repository-aware traversal honoring `.gitignore`, `.ignore`, and `.git/info/exclude` by default.
   - Persistent file table + trigram index stored on disk (serialized snapshot + journal; mmap is a planned optimization).
   - Trigram-based inverted index for ultra-fast substring search.
 - [x] **Live Update Engine**

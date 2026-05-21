@@ -83,12 +83,12 @@ pub(crate) fn prepare_index_update(config: &Config, update: IndexUpdate) -> Prep
 }
 
 fn prepare_file_meta(config: &Config, path: &Path) -> Option<PreparedFileMeta> {
-    if !vicaya_core::filter::should_index_path(path, &config.exclusions) {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !(metadata.is_file() || metadata.is_dir()) {
         return None;
     }
 
-    let metadata = std::fs::metadata(path).ok()?;
-    if !(metadata.is_file() || metadata.is_dir()) {
+    if !vicaya_scanner::should_index_path(config, path, metadata.is_dir()) {
         return None;
     }
 
@@ -1336,6 +1336,7 @@ mod tests {
         Config {
             index_roots: vec![root.to_path_buf()],
             exclusions: vec![],
+            respect_ignore_files: true,
             index_path: vicaya_dir.join("index"),
             max_memory_mb: 128,
             performance: PerformanceConfig {

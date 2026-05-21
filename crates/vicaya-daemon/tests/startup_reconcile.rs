@@ -80,6 +80,7 @@ fn it_indexes_offline_changes_via_startup_reconcile() {
     let config = Config {
         index_roots: vec![root.path().to_path_buf()],
         exclusions: vec![],
+        respect_ignore_files: true,
         index_path: vicaya_dir.path().join("index"),
         max_memory_mb: 128,
         performance: PerformanceConfig {
@@ -154,6 +155,7 @@ fn it_replays_journal_when_starting_from_existing_index() {
     let config = Config {
         index_roots: vec![root.path().to_path_buf()],
         exclusions: vec![],
+        respect_ignore_files: true,
         index_path: vicaya_dir.path().join("index"),
         max_memory_mb: 128,
         performance: PerformanceConfig {
@@ -232,6 +234,7 @@ fn it_discards_stale_journal_when_starting_from_fresh_build() {
     let config = Config {
         index_roots: vec![root.path().to_path_buf()],
         exclusions: vec![],
+        respect_ignore_files: true,
         index_path: vicaya_dir.path().join("index"),
         max_memory_mb: 128,
         performance: PerformanceConfig {

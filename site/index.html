@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>vicaya (विचय) - fast Rust file finder for macOS</title>
+    <meta
+      name="description"
+      content="vicaya is a blazing-fast Rust file finder for macOS with filename, path, and metadata search, a beautiful TUI, and an agent-friendly CLI."
+    />
+    <link
+      rel="icon"
+      href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="%23121218"/><text x="32" y="42" text-anchor="middle" font-size="30" font-weight="800" fill="%23FFB347">वि</text></svg>'
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="vicaya home">
+        <span class="brand-mark" aria-hidden="true">वि</span>
+        <span>
+          <strong>vicaya</strong>
+          <small>विचय</small>
+        </span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#cli">CLI</a>
+        <a href="#tui">TUI</a>
+        <a href="#system">Stack</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#features">Fit</a>
+        <a href="#screens">Screens</a>
+        <a href="https://github.com/indrasvat/vicaya">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-label="vicaya TUI overview">
+        <div class="hero-backdrop" aria-hidden="true">
+          <img
+            src="./assets/vicaya-tui-search.png"
+            alt=""
+            width="1350"
+            height="798"
+          />
+        </div>
+        <div class="hero-content">
+          <p class="eyebrow">Rust · terminal-native · macOS</p>
+          <h1>Find files before your flow breaks.</h1>
+          <p class="hero-text">
+            Vicaya is a lightweight developer file finder for filenames, paths,
+            and metadata. Query it from the CLI, move through results in the
+            TUI, and compose exact paths with the tools you already use.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#screens">See it in action</a>
+            <a class="button secondary" href="https://github.com/indrasvat/vicaya">GitHub</a>
+          </div>
+        </div>
+        <dl class="hero-metrics" aria-label="vicaya highlights">
+          <div>
+            <dt>rust</dt>
+            <dd>native speed</dd>
+          </div>
+          <div>
+            <dt>repos</dt>
+            <dd>ignore-aware</dd>
+          </div>
+          <div>
+            <dt>json</dt>
+            <dd>composable output</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="interfaces" id="cli">
+        <div class="section-copy">
+          <p class="eyebrow">What it is</p>
+          <h2>A file finder for terminals, scripts, and coding agents.</h2>
+        </div>
+        <div class="interface-grid">
+          <article id="tui">
+            <span>CLI</span>
+            <h3>Composable paths</h3>
+            <p>Plain, table, and JSON output for shells, <code>fzf</code>, <code>jq</code>, and agents.</p>
+          </article>
+          <article>
+            <span>TUI</span>
+            <h3>Interactive file finding</h3>
+            <p>Ranked results, preview, scoped navigation, and an action palette.</p>
+          </article>
+          <article>
+            <span>daemon</span>
+            <h3>Local catalog</h3>
+            <p>Tracks filenames, paths, size, and modification time on your machine.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="system" id="system">
+        <div class="section-copy">
+          <p class="eyebrow">Simple mental model</p>
+          <h2>Small stack. Same answers everywhere.</h2>
+        </div>
+        <div class="component-visual" aria-label="vicaya components">
+          <div class="component-card cli-card">
+            <span>vicaya</span>
+            <strong>CLI</strong>
+            <small>json · plain · table</small>
+          </div>
+          <div class="component-line line-left" aria-hidden="true"></div>
+          <div class="component-core">
+            <span>rakshaka</span>
+            <strong>daemon</strong>
+            <small>filesystem catalog</small>
+          </div>
+          <div class="component-line line-right" aria-hidden="true"></div>
+          <div class="component-card tui-card">
+            <span>vicaya-tui</span>
+            <strong>TUI</strong>
+            <small>preview · scope · act</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="feature-run" id="workflow">
+        <div class="feature-copy">
+          <p class="eyebrow">Developer workflow</p>
+          <h2>Developer trees are noisy. Vicaya ranks for that.</h2>
+          <p>
+            It is built for finding project files quickly, not for searching
+            inside file contents.
+          </p>
+        </div>
+        <div class="workflow-list" aria-label="vicaya workflow features">
+          <div>
+            <strong>rank</strong>
+            <span>Exact, prefix, substring, abbreviation, recency, and scope-aware ordering.</span>
+          </div>
+          <div>
+            <strong>scope</strong>
+            <span>Search globally, then narrow to the repo or subtree you are working in.</span>
+          </div>
+          <div>
+            <strong>filter</strong>
+            <span>Use <code>type:</code>, <code>ext:</code>, <code>path:</code>, <code>mtime:</code>, and <code>size:</code>.</span>
+          </div>
+          <div>
+            <strong>ignore</strong>
+            <span>Honor <code>.gitignore</code>, <code>.ignore</code>, and <code>.git/info/exclude</code>.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="capabilities" id="features">
+        <div class="section-copy centered">
+          <p class="eyebrow">Why Vicaya</p>
+          <h2>Path discovery for developer machines.</h2>
+        </div>
+        <div class="capability-grid">
+          <article>
+            <h3>Terminal-native</h3>
+            <p>Built for code paths, shell workflows, scripts, and automation.</p>
+          </article>
+          <article>
+            <h3>Content-search companion</h3>
+            <p>Find the file with Vicaya; search inside it with <code>rg</code>.</p>
+          </article>
+          <article>
+            <h3>Ranked source</h3>
+            <p>Use it as the ranked source for <code>fzf</code>, shells, and custom scripts.</p>
+          </article>
+          <article>
+            <h3>Local workflow</h3>
+            <p>Daemon, index, preview, and results stay on your machine.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="screens" id="screens">
+        <div class="section-copy centered">
+          <p class="eyebrow">Real screenshots</p>
+          <h2>CLI precision. TUI flow.</h2>
+        </div>
+        <div class="screen-grid lead-screens">
+          <figure class="screen">
+            <img
+              src="./assets/vicaya-cli-search.png"
+              alt="vicaya CLI showing table and plain search results"
+              width="1062"
+              height="342"
+            />
+            <figcaption>
+              <strong>CLI search</strong>
+              <span>Fast path output for humans, scripts, and agents.</span>
+            </figcaption>
+          </figure>
+          <figure class="screen">
+            <img
+              src="./assets/vicaya-tui-search.png"
+              alt="vicaya-tui showing a theme search with ranked results and preview pane"
+              width="1350"
+              height="798"
+            />
+            <figcaption>
+              <strong>TUI search + preview</strong>
+              <span><code>prashna</code>, <code>phala</code>, <code>purvadarshana</code>.</span>
+            </figcaption>
+          </figure>
+        </div>
+        <div class="screen-grid">
+          <figure class="screen">
+            <img
+              src="./assets/vicaya-tui-actions.png"
+              alt="vicaya-tui kriya-suchi action palette filtered to preview actions"
+              width="1350"
+              height="798"
+            />
+            <figcaption>
+              <strong>Action palette</strong>
+              <span>Filter kriyas from home row.</span>
+            </figcaption>
+          </figure>
+          <figure class="screen">
+            <img
+              src="./assets/vicaya-tui-drishti.png"
+              alt="vicaya-tui drishti switcher showing file and directory views"
+              width="1350"
+              height="798"
+            />
+            <figcaption>
+              <strong>View switcher</strong>
+              <span>Move between drishti modes.</span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="upgrade" id="upgrade" aria-label="vicaya upgrade command">
+        <p>
+          <strong>Stay current:</strong>
+          <code>vicaya upgrade</code> updates to the latest release.
+        </p>
+        <div class="upgrade-grid">
+          <div class="command-panel">
+            <pre><code>vicaya --version
+vicaya upgrade --check
+vicaya upgrade</code></pre>
+          </div>
+          <div class="release-links" aria-label="release links">
+            <a href="./version.json">version.json</a>
+            <a href="https://github.com/indrasvat/vicaya/releases">GitHub releases</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>vicaya (विचय)</span>
+      <a href="#upgrade">vicaya upgrade</a>
+      <a href="./version.json">version.json</a>
+      <a href="https://github.com/indrasvat/vicaya/releases">Releases</a>
+      <a href="https://github.com/indrasvat/vicaya/blob/main/LICENSE">Apache-2.0</a>
+    </footer>
+  </body>
+</html>
