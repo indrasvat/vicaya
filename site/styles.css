@@ -673,7 +673,7 @@ footer a:hover {
   }
 
   .hero {
-    min-height: 760px;
+    min-height: auto;
   }
 
   .hero-backdrop::after {
@@ -690,7 +690,7 @@ footer a:hover {
   .hero-content {
     align-self: start;
     padding-top: 58px;
-    padding-bottom: 240px;
+    padding-bottom: 28px;
   }
 
   h1 {
@@ -706,7 +706,12 @@ footer a:hover {
   }
 
   .hero-metrics {
+    position: relative;
+    right: auto;
+    bottom: auto;
+    left: auto;
     grid-template-columns: 1fr;
+    margin: 0 16px 48px;
   }
 
   .screen-grid,
