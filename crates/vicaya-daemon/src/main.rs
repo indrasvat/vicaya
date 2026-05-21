@@ -8,9 +8,13 @@ use std::sync::{Arc, Mutex, RwLock};
 use tracing::{info, warn};
 use vicaya_core::{Config, Result};
 use vicaya_scanner::{IndexSnapshot, Scanner};
-use vicaya_watcher::FileWatcher;
+use vicaya_watcher::{FileWatcher, IndexUpdate};
 
-use crate::ipc_server::{DaemonState, IpcServer, SharedState};
+use crate::ipc_server::{
+    prepare_index_update, DaemonState, IpcServer, PreparedIndexUpdate, SharedState,
+};
+
+const WATCHER_APPLY_CHUNK_SIZE: usize = 256;
 
 fn main() -> Result<()> {
     vicaya_core::logging::init();
@@ -177,16 +181,53 @@ fn start_watcher_thread(
                 }
             }
 
-            let mut state = state.write().unwrap();
-            for update in updates {
-                state.apply_update(update);
-            }
+            apply_watcher_updates(&state, updates);
         }
 
         info!("Watcher thread exiting");
     });
 
     Ok(handle)
+}
+
+fn apply_watcher_updates(state: &SharedState, updates: Vec<IndexUpdate>) {
+    let config = { state.read().unwrap().config.clone() };
+    let updates = prepare_watcher_updates(&config, updates);
+    apply_watcher_updates_chunked(state, updates, WATCHER_APPLY_CHUNK_SIZE, |_| {
+        std::thread::yield_now();
+    });
+}
+
+fn prepare_watcher_updates(config: &Config, updates: Vec<IndexUpdate>) -> Vec<PreparedIndexUpdate> {
+    updates
+        .into_iter()
+        .map(|update| prepare_index_update(config, update))
+        .collect()
+}
+
+fn apply_watcher_updates_chunked<F>(
+    state: &SharedState,
+    updates: Vec<PreparedIndexUpdate>,
+    chunk_size: usize,
+    mut after_chunk: F,
+) where
+    F: FnMut(usize),
+{
+    let chunk_size = chunk_size.max(1);
+    let chunk_count = updates.len().div_ceil(chunk_size);
+
+    for (idx, chunk) in updates.chunks(chunk_size).enumerate() {
+        {
+            let mut state = state.write().unwrap();
+            for update in chunk {
+                state.apply_prepared_update(update.clone());
+            }
+        }
+
+        if idx + 1 < chunk_count {
+            after_chunk(idx + 1);
+        }
+    }
 }
 
 fn start_reconcile_thread(
@@ -315,5 +356,146 @@ fn is_internal_update(
             is_internal_path(from, internal_dir, index_dir)
                 || is_internal_path(to, internal_dir, index_dir)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use vicaya_core::config::PerformanceConfig;
+
+    fn test_config(root: &Path, vicaya_dir: &Path) -> Config {
+        Config {
+            index_roots: vec![root.to_path_buf()],
+            exclusions: vec![],
+            index_path: vicaya_dir.join("index"),
+            max_memory_mb: 128,
+            performance: PerformanceConfig {
+                scanner_threads: 2,
+                reconcile_hour: 3,
+            },
+        }
+    }
+
+    fn build_state(root: &Path, vicaya_dir: &Path) -> SharedState {
+        let config = test_config(root, vicaya_dir);
+        std::fs::create_dir_all(&config.index_path).unwrap();
+        let snapshot = Scanner::new(config.clone()).scan().unwrap();
+        Arc::new(RwLock::new(DaemonState::new(
+            config,
+            vicaya_dir.join("index.bin"),
+            vicaya_dir.join("journal.log"),
+            snapshot,
+        )))
+    }
+
+    fn state_contains_path(state: &DaemonState, path: &Path) -> bool {
+        let needle = path.to_string_lossy();
+        state.snapshot.file_table.iter().any(|(_, meta)| {
+            if meta.path_len == 0 {
+                return false;
+            }
+
+            state
+                .snapshot
+                .string_arena
+                .get(meta.path_offset, meta.path_len)
+                .is_some_and(|indexed| indexed == needle)
+        })
+    }
+
+    fn public_indexed_count(state: &DaemonState) -> usize {
+        state.path_to_id.len()
+            + state
+                .path_hash_collisions
+                .values()
+                .map(|ids| ids.len())
+                .sum::<usize>()
+    }
+
+    #[test]
+    fn watcher_updates_release_state_lock_between_chunks() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let state = build_state(root.path(), vicaya_dir.path());
+
+        let first = root.path().join("one.txt");
+        let second = root.path().join("two.txt");
+        std::fs::write(&first, "one").unwrap();
+        std::fs::write(&second, "two").unwrap();
+
+        let updates = prepare_watcher_updates(
+            &state.read().unwrap().config,
+            vec![
+                IndexUpdate::Create {
+                    path: first.to_string_lossy().to_string(),
+                },
+                IndexUpdate::Create {
+                    path: second.to_string_lossy().to_string(),
+                },
+            ],
+        );
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let worker_state = Arc::clone(&state);
+
+        let worker = std::thread::spawn(move || {
+            apply_watcher_updates_chunked(&worker_state, updates, 1, |chunk| {
+                if chunk == 1 {
+                    ready_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                }
+            });
+        });
+
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        {
+            let state = state.read().unwrap();
+            assert!(public_indexed_count(&state) >= 1);
+        }
+        resume_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let state = state.read().unwrap();
+        assert!(state_contains_path(&state, &first));
+        assert!(state_contains_path(&state, &second));
+    }
+
+    #[test]
+    fn internal_update_filter_rejects_vicaya_state_paths() {
+        let internal_dir = Path::new("/tmp/vicaya");
+        let index_dir = Path::new("/tmp/vicaya/index");
+        let indexed_path = "/tmp/repo/src/main.rs".to_string();
+        let internal_path = "/tmp/vicaya/daemon.sock".to_string();
+        let index_path = "/tmp/vicaya/index/index.journal".to_string();
+
+        assert!(!is_internal_update(
+            &IndexUpdate::Modify { path: indexed_path },
+            internal_dir,
+            index_dir
+        ));
+        assert!(is_internal_update(
+            &IndexUpdate::Modify {
+                path: internal_path
+            },
+            internal_dir,
+            index_dir
+        ));
+        assert!(is_internal_update(
+            &IndexUpdate::Create { path: index_path },
+            internal_dir,
+            index_dir
+        ));
+        assert!(is_internal_update(
+            &IndexUpdate::Move {
+                from: "/tmp/repo/a".to_string(),
+                to: "/tmp/vicaya/index/index.bin".to_string(),
+            },
+            internal_dir,
+            index_dir
+        ));
     }
 }

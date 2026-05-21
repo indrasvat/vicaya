@@ -16,6 +16,7 @@ use vicaya_scanner::{IndexSnapshot, Scanner};
 use vicaya_watcher::IndexUpdate;
 
 pub type SharedState = Arc<RwLock<DaemonState>>;
+const RECENT_UPDATE_LIMIT: usize = 4096;
 
 /// Shared daemon state.
 pub struct DaemonState {
@@ -27,11 +28,91 @@ pub struct DaemonState {
     pub path_to_id: std::collections::HashMap<u64, FileId>,
     pub path_hash_collisions: std::collections::HashMap<u64, Vec<FileId>>,
     pub path_order: Vec<FileId>,
+    pub path_order_dirty: bool,
     pub name_to_ids: std::collections::HashMap<String, Vec<FileId>>,
     pub recent_order: Vec<FileId>,
+    pub recent_updates: Vec<FileId>,
     pub inode_to_id: std::collections::HashMap<(u64, u64), FileId>,
     pub last_updated: i64,
     pub reconciling: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PreparedIndexUpdate {
+    CreateOrModify {
+        file: Option<PreparedFileMeta>,
+    },
+    Delete {
+        path: PathBuf,
+    },
+    Move {
+        from: PathBuf,
+        file: Option<PreparedFileMeta>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedFileMeta {
+    path: String,
+    name: String,
+    size: u64,
+    mtime: i64,
+    dev: u64,
+    ino: u64,
+}
+
+pub(crate) fn prepare_index_update(config: &Config, update: IndexUpdate) -> PreparedIndexUpdate {
+    match update {
+        IndexUpdate::Create { path } | IndexUpdate::Modify { path } => {
+            let path = PathBuf::from(path);
+            PreparedIndexUpdate::CreateOrModify {
+                file: prepare_file_meta(config, &path),
+            }
+        }
+        IndexUpdate::Delete { path } => PreparedIndexUpdate::Delete {
+            path: PathBuf::from(path),
+        },
+        IndexUpdate::Move { from, to } => {
+            let to = PathBuf::from(to);
+            PreparedIndexUpdate::Move {
+                from: PathBuf::from(from),
+                file: prepare_file_meta(config, &to),
+            }
+        }
+    }
+}
+
+fn prepare_file_meta(config: &Config, path: &Path) -> Option<PreparedFileMeta> {
+    if !vicaya_core::filter::should_index_path(path, &config.exclusions) {
+        return None;
+    }
+
+    let metadata = std::fs::metadata(path).ok()?;
+    if !(metadata.is_file() || metadata.is_dir()) {
+        return None;
+    }
+
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+
+    let name = path.file_name()?.to_string_lossy().to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(PreparedFileMeta {
+        path: path.to_string_lossy().to_string(),
+        name,
+        size: metadata.len(),
+        mtime: metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+    })
 }
 
 impl DaemonState {
@@ -64,8 +145,10 @@ impl DaemonState {
             path_to_id,
             path_hash_collisions,
             path_order,
+            path_order_dirty: false,
             name_to_ids,
             recent_order,
+            recent_updates: Vec::new(),
             inode_to_id,
             last_updated,
             reconciling: false,
@@ -73,21 +156,24 @@ impl DaemonState {
     }
 
     pub fn apply_update(&mut self, update: IndexUpdate) {
-        match update {
-            IndexUpdate::Create { path } | IndexUpdate::Modify { path } => {
-                self.upsert_path(Path::new(&path));
-            }
-            IndexUpdate::Delete { path } => {
-                self.remove_path(Path::new(&path));
-            }
-            IndexUpdate::Move { from, to } => {
-                self.move_path(Path::new(&from), Path::new(&to));
-            }
-        }
+        let update = prepare_index_update(&self.config, update);
+        self.apply_prepared_update(update);
     }
 
-    fn should_index(&self, path: &Path) -> bool {
-        vicaya_core::filter::should_index_path(path, &self.config.exclusions)
+    pub(crate) fn apply_prepared_update(&mut self, update: PreparedIndexUpdate) {
+        match update {
+            PreparedIndexUpdate::CreateOrModify { file } => {
+                if let Some(file) = file {
+                    self.upsert_prepared(file);
+                }
+            }
+            PreparedIndexUpdate::Delete { path } => {
+                self.remove_path(&path);
+            }
+            PreparedIndexUpdate::Move { from, file } => {
+                self.move_prepared(&from, file);
+            }
+        }
     }
 
     fn indexed_file_count(&self) -> usize {
@@ -124,6 +210,7 @@ impl DaemonState {
                 .map(|ids| ids.capacity() * std::mem::size_of::<FileId>())
                 .sum::<usize>()
             + self.recent_order.capacity() * std::mem::size_of::<FileId>()
+            + self.recent_updates.capacity() * std::mem::size_of::<FileId>()
             + hash_map_allocated_bytes(&self.inode_to_id)) as u64
     }
 
@@ -182,37 +269,15 @@ impl DaemonState {
             .insert(hash, vec![existing, file_id]);
     }
 
-    fn insert_path_order(&mut self, file_id: FileId) {
-        let Some(path) = snapshot_path_for_id(&self.snapshot, file_id) else {
-            return;
-        };
-        if path.is_empty() {
-            return;
-        }
-
-        let pos = self.path_order.partition_point(|&id| {
-            snapshot_path_for_id(&self.snapshot, id).is_some_and(|existing| existing < path)
-        });
-        self.path_order.insert(pos, file_id);
-    }
-
-    fn remove_path_order(&mut self, file_id: FileId, path: &str) {
-        let start = self.path_order.partition_point(|&id| {
-            snapshot_path_for_id(&self.snapshot, id).is_some_and(|existing| existing < path)
-        });
-        let end = self.path_order[start..]
-            .partition_point(|&id| snapshot_path_for_id(&self.snapshot, id) == Some(path))
-            + start;
-
-        if let Some(pos) = self.path_order[start..end]
-            .iter()
-            .position(|&id| id == file_id)
-        {
-            self.path_order.remove(start + pos);
-        }
+    fn mark_path_order_dirty(&mut self) {
+        self.path_order_dirty = true;
     }
 
     fn scoped_file_ids_up_to(&self, scope: &Path, max_ids: usize) -> Option<(Vec<FileId>, bool)> {
+        if self.path_order_dirty {
+            return None;
+        }
+
         let (scope, scope_child_prefix) = normalized_scope_parts(scope)?;
         let start = self.path_order.partition_point(|&id| {
             snapshot_path_for_id(&self.snapshot, id).is_some_and(|path| path < scope.as_str())
@@ -238,20 +303,40 @@ impl DaemonState {
         Some((ids, true))
     }
 
-    fn recent_file_ids_in_scope(&self, limit: usize, scope: &Path) -> Option<Vec<FileId>> {
-        let (scope, scope_child_prefix) = normalized_scope_parts(scope)?;
+    fn recent_file_ids(&self, limit: usize, scope: Option<&Path>) -> Option<Vec<FileId>> {
+        let scope = scope.and_then(normalized_scope_parts);
+        let mut seen = std::collections::HashSet::with_capacity(limit.saturating_mul(2));
         let mut ids = Vec::with_capacity(limit);
 
-        for &file_id in &self.recent_order {
+        for file_id in self
+            .recent_updates
+            .iter()
+            .rev()
+            .chain(self.recent_order.iter())
+            .copied()
+        {
+            if ids.len() == limit {
+                break;
+            }
+            if !seen.insert(file_id) {
+                continue;
+            }
+            let Some(meta) = self.snapshot.file_table.get(file_id) else {
+                continue;
+            };
+            if meta.path_len == 0 || meta.name_len == 0 {
+                continue;
+            }
             let Some(path) = snapshot_path_for_id(&self.snapshot, file_id) else {
                 continue;
             };
-            if path_is_in_normalized_scope(path, &scope, &scope_child_prefix) {
-                ids.push(file_id);
-                if ids.len() == limit {
-                    break;
+            if let Some((scope, scope_child_prefix)) = scope.as_ref() {
+                if !path_is_in_normalized_scope(path, scope, scope_child_prefix) {
+                    continue;
                 }
             }
+
+            ids.push(file_id);
         }
 
         Some(ids)
@@ -311,27 +396,23 @@ impl DaemonState {
         }
     }
 
-    fn insert_recent_order(&mut self, file_id: FileId) {
+    fn mark_recent_update(&mut self, file_id: FileId) {
         let Some(meta) = self.snapshot.file_table.get(file_id) else {
             return;
         };
         if meta.path_len == 0 || meta.name_len == 0 {
             return;
         }
-        let mtime = meta.mtime;
-        let pos = self.recent_order.partition_point(|&id| {
-            let Some(existing) = self.snapshot.file_table.get(id) else {
-                return false;
-            };
-            existing.mtime > mtime || (existing.mtime == mtime && id < file_id)
-        });
-        self.recent_order.insert(pos, file_id);
+        self.recent_updates.retain(|&id| id != file_id);
+        self.recent_updates.push(file_id);
+        if self.recent_updates.len() > RECENT_UPDATE_LIMIT {
+            let excess = self.recent_updates.len() - RECENT_UPDATE_LIMIT;
+            self.recent_updates.drain(0..excess);
+        }
     }
 
-    fn remove_recent_order(&mut self, file_id: FileId) {
-        if let Some(pos) = self.recent_order.iter().position(|&id| id == file_id) {
-            self.recent_order.remove(pos);
-        }
+    fn remove_recent_update(&mut self, file_id: FileId) {
+        self.recent_updates.retain(|&id| id != file_id);
     }
 
     fn remove_path_mapping(&mut self, path: &str) -> Option<FileId> {
@@ -376,45 +457,12 @@ impl DaemonState {
         Some(file_id)
     }
 
-    fn upsert_path(&mut self, path: &Path) {
-        if !self.should_index(path) {
-            return;
-        }
+    fn upsert_prepared(&mut self, file: PreparedFileMeta) {
+        let path_str = file.path.as_str();
+        let name_str = file.name.as_str();
+        let inode_key = (file.dev, file.ino);
 
-        let metadata = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-        if !(metadata.is_file() || metadata.is_dir()) {
-            return;
-        }
-
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
-
-        let mtime = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let dev = metadata.dev();
-        let ino = metadata.ino();
-        let size = metadata.len();
-
-        let path_str = path.to_string_lossy();
-        let name_str = path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        if name_str.is_empty() {
-            return;
-        }
-
-        let inode_key = (dev, ino);
-
-        if let Some(file_id) = self.get_file_id_for_path(path_str.as_ref()) {
+        if let Some(file_id) = self.get_file_id_for_path(path_str) {
             let (old_inode_key, old_name) = {
                 let Some(meta) = self.snapshot.file_table.get(file_id) else {
                     return;
@@ -428,8 +476,7 @@ impl DaemonState {
                 ((meta.dev, meta.ino), old_name)
             };
 
-            self.remove_recent_order(file_id);
-            if old_name != name_str.as_ref() {
+            if old_name != name_str {
                 self.remove_name_mapping(file_id, &old_name);
             }
 
@@ -444,24 +491,24 @@ impl DaemonState {
                 self.inode_to_id.insert(inode_key, file_id);
             }
 
-            if old_name != name_str.as_ref() {
+            if old_name != name_str {
                 self.snapshot.trigram_index.remove_text(file_id, &old_name);
-                self.snapshot.trigram_index.add(file_id, name_str.as_ref());
+                self.snapshot.trigram_index.add(file_id, name_str);
 
-                let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+                let (name_offset, name_len) = self.snapshot.string_arena.add(name_str);
                 meta.name_offset = name_offset;
                 meta.name_len = name_len;
             }
 
-            meta.size = size;
-            meta.mtime = mtime;
-            meta.dev = dev;
-            meta.ino = ino;
+            meta.size = file.size;
+            meta.mtime = file.mtime;
+            meta.dev = file.dev;
+            meta.ino = file.ino;
 
-            if old_name != name_str.as_ref() {
+            if old_name != name_str {
                 self.insert_name_mapping(file_id);
             }
-            self.insert_recent_order(file_id);
+            self.mark_recent_update(file_id);
         } else if let Some(&file_id) = self.inode_to_id.get(&inode_key) {
             // Same inode (dev+ino) already exists in the index under a different path; treat this
             // as a move/rename even if the watcher didn't report the old path.
@@ -489,10 +536,8 @@ impl DaemonState {
 
             if !old_path.is_empty() {
                 let _ = self.remove_path_mapping(&old_path);
-                self.remove_path_order(file_id, &old_path);
             }
-            self.remove_recent_order(file_id);
-            if old_name != name_str.as_ref() {
+            if old_name != name_str {
                 self.remove_name_mapping(file_id, &old_name);
             }
 
@@ -500,50 +545,50 @@ impl DaemonState {
                 return;
             };
 
-            if old_name != name_str.as_ref() {
+            if old_name != name_str {
                 self.snapshot.trigram_index.remove_text(file_id, &old_name);
-                self.snapshot.trigram_index.add(file_id, name_str.as_ref());
+                self.snapshot.trigram_index.add(file_id, name_str);
 
-                let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+                let (name_offset, name_len) = self.snapshot.string_arena.add(name_str);
                 meta.name_offset = name_offset;
                 meta.name_len = name_len;
             }
 
-            let (path_offset, path_len) = self.snapshot.string_arena.add(path_str.as_ref());
+            let (path_offset, path_len) = self.snapshot.string_arena.add(path_str);
             meta.path_offset = path_offset;
             meta.path_len = path_len;
-            meta.size = size;
-            meta.mtime = mtime;
-            meta.dev = dev;
-            meta.ino = ino;
+            meta.size = file.size;
+            meta.mtime = file.mtime;
+            meta.dev = file.dev;
+            meta.ino = file.ino;
 
-            self.insert_path_mapping(path_str.as_ref(), file_id);
-            self.insert_path_order(file_id);
-            if old_name != name_str.as_ref() {
+            self.insert_path_mapping(path_str, file_id);
+            self.mark_path_order_dirty();
+            if old_name != name_str {
                 self.insert_name_mapping(file_id);
             }
-            self.insert_recent_order(file_id);
+            self.mark_recent_update(file_id);
         } else {
-            let (path_offset, path_len) = self.snapshot.string_arena.add(path_str.as_ref());
-            let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+            let (path_offset, path_len) = self.snapshot.string_arena.add(path_str);
+            let (name_offset, name_len) = self.snapshot.string_arena.add(name_str);
 
             let new_meta = FileMeta {
                 path_offset,
                 path_len,
                 name_offset,
                 name_len,
-                size,
-                mtime,
-                dev,
-                ino,
+                size: file.size,
+                mtime: file.mtime,
+                dev: file.dev,
+                ino: file.ino,
             };
 
             let file_id = self.snapshot.file_table.insert(new_meta);
-            self.snapshot.trigram_index.add(file_id, name_str.as_ref());
-            self.insert_path_mapping(path_str.as_ref(), file_id);
-            self.insert_path_order(file_id);
+            self.snapshot.trigram_index.add(file_id, name_str);
+            self.insert_path_mapping(path_str, file_id);
+            self.mark_path_order_dirty();
             self.insert_name_mapping(file_id);
-            self.insert_recent_order(file_id);
+            self.mark_recent_update(file_id);
             self.inode_to_id.insert(inode_key, file_id);
         }
 
@@ -555,8 +600,6 @@ impl DaemonState {
         let Some(file_id) = self.remove_path_mapping(path_str.as_ref()) else {
             return;
         };
-        self.remove_path_order(file_id, path_str.as_ref());
-        self.remove_recent_order(file_id);
 
         self.tombstone_file(file_id);
     }
@@ -579,6 +622,8 @@ impl DaemonState {
             self.inode_to_id.remove(&inode_key);
         }
 
+        self.mark_path_order_dirty();
+        self.remove_recent_update(file_id);
         self.snapshot.trigram_index.remove_text(file_id, &old_name);
         self.remove_name_mapping(file_id, &old_name);
 
@@ -595,64 +640,30 @@ impl DaemonState {
         self.last_updated = now_epoch_seconds();
     }
 
-    fn move_path(&mut self, from: &Path, to: &Path) {
+    fn move_prepared(&mut self, from: &Path, file: Option<PreparedFileMeta>) {
         let from_str = from.to_string_lossy();
         let Some(file_id) = self.remove_path_mapping(from_str.as_ref()) else {
             // If we didn't know about the old path, treat as a create on the new path.
-            self.upsert_path(to);
-            return;
-        };
-        self.remove_path_order(file_id, from_str.as_ref());
-        self.remove_recent_order(file_id);
-
-        if !self.should_index(to) {
-            self.tombstone_file(file_id);
-            return;
-        }
-
-        let metadata = match std::fs::metadata(to) {
-            Ok(m) => m,
-            Err(_) => {
-                self.tombstone_file(file_id);
-                return;
+            if let Some(file) = file {
+                self.upsert_prepared(file);
             }
+            return;
         };
-        if !(metadata.is_file() || metadata.is_dir()) {
+
+        let Some(file) = file else {
             self.tombstone_file(file_id);
             return;
-        }
+        };
 
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
-
-        let mtime = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let dev = metadata.dev();
-        let ino = metadata.ino();
-        let size = metadata.len();
-
-        let to_str = to.to_string_lossy();
-        let name_str = to
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        if name_str.is_empty() {
-            self.tombstone_file(file_id);
-            return;
-        }
+        let to_str = file.path.as_str();
+        let name_str = file.name.as_str();
 
         if let Some(overwritten_id) = self
-            .get_file_id_for_path(to_str.as_ref())
+            .get_file_id_for_path(to_str)
             .filter(|&existing_id| existing_id != file_id)
         {
-            let _ = self.remove_path_mapping(to_str.as_ref());
-            self.remove_path_order(overwritten_id, to_str.as_ref());
-            self.remove_recent_order(overwritten_id);
+            let _ = self.remove_path_mapping(to_str);
+            self.remove_recent_update(overwritten_id);
             self.tombstone_file(overwritten_id);
         }
 
@@ -669,32 +680,32 @@ impl DaemonState {
             ((meta.dev, meta.ino), old_name)
         };
 
-        if old_name != name_str.as_ref() {
+        if old_name != name_str {
             self.remove_name_mapping(file_id, &old_name);
             self.snapshot.trigram_index.remove_text(file_id, &old_name);
-            self.snapshot.trigram_index.add(file_id, name_str.as_ref());
+            self.snapshot.trigram_index.add(file_id, name_str);
         }
 
         let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
             return;
         };
 
-        if old_name != name_str.as_ref() {
-            let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
+        if old_name != name_str {
+            let (name_offset, name_len) = self.snapshot.string_arena.add(name_str);
             meta.name_offset = name_offset;
             meta.name_len = name_len;
         }
 
-        let (path_offset, path_len) = self.snapshot.string_arena.add(to_str.as_ref());
+        let (path_offset, path_len) = self.snapshot.string_arena.add(to_str);
 
         meta.path_offset = path_offset;
         meta.path_len = path_len;
-        meta.size = size;
-        meta.mtime = mtime;
-        meta.dev = dev;
-        meta.ino = ino;
+        meta.size = file.size;
+        meta.mtime = file.mtime;
+        meta.dev = file.dev;
+        meta.ino = file.ino;
 
-        let new_inode_key = (dev, ino);
+        let new_inode_key = (file.dev, file.ino);
         if old_inode_key != new_inode_key {
             if self.inode_to_id.get(&old_inode_key) == Some(&file_id) {
                 self.inode_to_id.remove(&old_inode_key);
@@ -704,12 +715,12 @@ impl DaemonState {
             self.inode_to_id.insert(new_inode_key, file_id);
         }
 
-        self.insert_path_mapping(to_str.as_ref(), file_id);
-        self.insert_path_order(file_id);
-        if old_name != name_str.as_ref() {
+        self.insert_path_mapping(to_str, file_id);
+        self.mark_path_order_dirty();
+        if old_name != name_str {
             self.insert_name_mapping(file_id);
         }
-        self.insert_recent_order(file_id);
+        self.mark_recent_update(file_id);
         self.last_updated = now_epoch_seconds();
     }
 }
@@ -927,6 +938,19 @@ fn truncate_journal(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn replace_state(state: &SharedState, rebuilt: DaemonState) {
+    let old_state = {
+        let mut state = state.write().unwrap();
+        std::mem::replace(&mut *state, rebuilt)
+    };
+
+    // Dropping a multi-GB old state can monopolize allocator locks and stall
+    // foreground IPC threads even though the daemon state lock has been
+    // released. Rebuilds are rare; keep the retired state until process exit so
+    // status/search stay responsive through reconcile completion.
+    std::mem::forget(old_state);
+}
+
 pub fn full_rebuild_from_disk(
     state: &SharedState,
     journal_lock: &Arc<Mutex<()>>,
@@ -978,8 +1002,7 @@ pub fn full_rebuild_from_disk(
             rebuilt.last_updated = now_epoch_seconds();
             rebuilt.reconciling = false;
 
-            let mut state = state.write().unwrap();
-            *state = rebuilt;
+            replace_state(state, rebuilt);
             applied_updates
         };
 
@@ -1178,14 +1201,11 @@ impl IpcHandler {
                 let results = if query.trim().is_empty() && recent_if_empty {
                     if let Some((file_ids, true)) = scoped_file_ids.as_ref() {
                         engine.recent_file_ids(limit, file_ids)
-                    } else if let Some(scope) = filter_scope_path.as_deref() {
+                    } else {
                         let file_ids = state
-                            .recent_file_ids_in_scope(limit, scope)
+                            .recent_file_ids(limit, filter_scope_path.as_deref())
                             .unwrap_or_default();
                         engine.recent_file_ids(limit, &file_ids)
-                    } else {
-                        let end = state.recent_order.len().min(limit);
-                        engine.recent_file_ids(limit, &state.recent_order[..end])
                     }
                 } else if let Some(file_ids) = exact_name_file_ids.as_deref() {
                     engine.exact_name_file_ids(limit, file_ids)
@@ -1355,7 +1375,10 @@ mod tests {
         let file_id = state.get_file_id_for_path(&from.to_string_lossy()).unwrap();
 
         std::fs::rename(&from, &to).unwrap();
-        state.move_path(&from, &to);
+        state.apply_update(IndexUpdate::Move {
+            from: from.to_string_lossy().to_string(),
+            to: to.to_string_lossy().to_string(),
+        });
 
         assert!(state
             .get_file_id_for_path(&from.to_string_lossy())
@@ -1390,7 +1413,10 @@ mod tests {
         let overwritten_inode = inode_key_for(&state, overwritten_id);
 
         std::fs::rename(&from, &to).unwrap();
-        state.move_path(&from, &to);
+        state.apply_update(IndexUpdate::Move {
+            from: from.to_string_lossy().to_string(),
+            to: to.to_string_lossy().to_string(),
+        });
 
         assert!(state
             .get_file_id_for_path(&from.to_string_lossy())
@@ -1620,6 +1646,22 @@ mod tests {
     }
 
     #[test]
+    fn scoped_file_id_cache_is_disabled_after_incremental_path_changes() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let mut state = build_state(root.path(), vicaya_dir.path());
+
+        let new_file = root.path().join("new.txt");
+        std::fs::write(&new_file, "new").unwrap();
+        state.apply_update(IndexUpdate::Create {
+            path: new_file.to_string_lossy().to_string(),
+        });
+
+        assert!(state.path_order_dirty);
+        assert!(state.scoped_file_ids_up_to(root.path(), 10).is_none());
+    }
+
+    #[test]
     fn exact_name_search_is_filtered_inside_scope() {
         let vicaya_dir = tempdir().unwrap();
         let root = tempdir().unwrap();
@@ -1719,6 +1761,86 @@ mod tests {
 
         drop(reader);
         drop(stream);
+        server_thread.join().unwrap();
+        assert!(shutdown.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn ipc_server_handles_multiple_tui_clients_concurrently() {
+        use std::io::Write as _;
+        use std::os::unix::net::UnixStream;
+
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let cargo = root.path().join("Cargo.toml");
+        std::fs::write(&cargo, "[package]\n").unwrap();
+
+        let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let journal_lock = Arc::new(Mutex::new(()));
+        let rebuild_lock = Arc::new(Mutex::new(()));
+        let socket = vicaya_dir.path().join("daemon.sock");
+        let server =
+            IpcServer::new(&socket, state, shutdown.clone(), journal_lock, rebuild_lock).unwrap();
+        let server_thread = std::thread::spawn(move || server.run().unwrap());
+
+        let mut clients = Vec::new();
+        for _ in 0..4 {
+            let socket = socket.clone();
+            let scope = root.path().to_string_lossy().to_string();
+            clients.push(std::thread::spawn(move || {
+                let mut stream = UnixStream::connect(&socket).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+
+                let send = |stream: &mut UnixStream, request: Request| {
+                    let mut json = request.to_json().unwrap();
+                    json.push('\n');
+                    stream.write_all(json.as_bytes()).unwrap();
+                };
+
+                send(&mut stream, Request::Status);
+                let line = vicaya_core::ipc::read_message(&mut reader)
+                    .unwrap()
+                    .unwrap();
+                assert!(matches!(
+                    Response::from_json(&line).unwrap(),
+                    Response::Status { .. }
+                ));
+
+                send(
+                    &mut stream,
+                    Request::Search {
+                        query: "Cargo".to_string(),
+                        limit: 10,
+                        scope: Some(scope.clone()),
+                        filter_scope: Some(scope),
+                        recent_if_empty: false,
+                    },
+                );
+                let line = vicaya_core::ipc::read_message(&mut reader)
+                    .unwrap()
+                    .unwrap();
+                match Response::from_json(&line).unwrap() {
+                    Response::SearchResults { results } => assert_eq!(results.len(), 1),
+                    other => panic!("unexpected concurrent search response: {other:?}"),
+                }
+            }));
+        }
+
+        for client in clients {
+            client.join().unwrap();
+        }
+
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut json = Request::Shutdown.to_json().unwrap();
+        json.push('\n');
+        stream.write_all(json.as_bytes()).unwrap();
+        let line = vicaya_core::ipc::read_message(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(Response::from_json(&line).unwrap(), Response::Ok));
+
         server_thread.join().unwrap();
         assert!(shutdown.load(Ordering::Relaxed));
     }

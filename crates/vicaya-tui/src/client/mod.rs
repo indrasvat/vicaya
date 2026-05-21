@@ -2,25 +2,47 @@
 
 use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
 use vicaya_core::ipc::{Request, Response};
 use vicaya_index::SearchResult;
+
+const IPC_TIMEOUT: Duration = Duration::from_secs(2);
+const REQUEST_ATTEMPTS: usize = 3;
 
 /// IPC client for daemon communication.
 pub struct IpcClient {
     stream: Option<UnixStream>,
+    timeout: Duration,
+    attempts: usize,
 }
 
 impl IpcClient {
     /// Create a new IPC client and attempt to connect.
     pub fn new() -> Self {
-        let stream = Self::try_connect();
-        Self { stream }
+        Self::with_options(IPC_TIMEOUT, REQUEST_ATTEMPTS)
+    }
+
+    /// Create a best-effort IPC client for background health checks.
+    pub fn best_effort() -> Self {
+        Self::with_options(Duration::from_secs(1), 1)
+    }
+
+    fn with_options(timeout: Duration, attempts: usize) -> Self {
+        let stream = Self::try_connect(timeout);
+        Self {
+            stream,
+            timeout,
+            attempts,
+        }
     }
 
     /// Try to connect to the daemon.
-    fn try_connect() -> Option<UnixStream> {
+    fn try_connect(timeout: Duration) -> Option<UnixStream> {
         let socket_path = vicaya_core::ipc::socket_path();
-        UnixStream::connect(&socket_path).ok()
+        let stream = UnixStream::connect(&socket_path).ok()?;
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
+        Some(stream)
     }
 
     /// Check if connected to daemon.
@@ -30,7 +52,7 @@ impl IpcClient {
 
     /// Reconnect to the daemon.
     pub fn reconnect(&mut self) {
-        self.stream = Self::try_connect();
+        self.stream = Self::try_connect(self.timeout);
     }
 
     /// Search for files.
@@ -117,39 +139,46 @@ impl IpcClient {
 
     /// Send a request and receive a response.
     fn request(&mut self, req: &Request) -> anyhow::Result<Response> {
-        // Try with existing connection first
-        let mut stream = if let Some(stream) = self.stream.as_mut() {
-            stream
-        } else {
-            // No connection, try to establish one
-            self.reconnect();
-            self.stream
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("Daemon not running"))?
-        };
-
-        // Serialize request
         let mut request_json = req
             .to_json()
             .map_err(|e| anyhow::anyhow!("Failed to serialize request: {}", e))?;
         request_json.push('\n');
 
-        // Try to send request
-        let result = stream.write_all(request_json.as_bytes());
+        let mut last_error: Option<anyhow::Error> = None;
 
-        // If write failed, try reconnecting once
-        if result.is_err() {
-            self.reconnect();
-            stream = self
-                .stream
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("Daemon not running"))?;
-            stream
-                .write_all(request_json.as_bytes())
-                .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
+        for attempt in 0..self.attempts {
+            match self.request_once(&request_json) {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    last_error = Some(error);
+                    self.stream = None;
+                }
+            }
+
+            if attempt + 1 < self.attempts {
+                std::thread::sleep(Duration::from_millis(50));
+                self.stream = None;
+                self.reconnect();
+            }
         }
 
-        // Read response
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Daemon not running")))
+    }
+
+    fn request_once(&mut self, request_json: &str) -> anyhow::Result<Response> {
+        if self.stream.is_none() {
+            self.reconnect();
+        }
+
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Daemon not running"))?;
+
+        stream
+            .write_all(request_json.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
+
         let mut reader = BufReader::new(stream);
         let line = vicaya_core::ipc::read_message(&mut reader)?
             .ok_or_else(|| anyhow::anyhow!("Daemon closed IPC connection"))?;
@@ -200,6 +229,48 @@ mod tests {
             json.push('\n');
             stream.write_all(json.as_bytes()).unwrap();
             request
+        })
+    }
+
+    fn close_then_response_server(
+        dir: &std::path::Path,
+        response: Response,
+    ) -> std::thread::JoinHandle<Vec<Request>> {
+        close_n_then_response_server(dir, 1, response)
+    }
+
+    fn close_n_then_response_server(
+        dir: &std::path::Path,
+        close_count: usize,
+        response: Response,
+    ) -> std::thread::JoinHandle<Vec<Request>> {
+        let socket = dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+
+        std::thread::spawn(move || {
+            let mut requests = Vec::new();
+
+            for _ in 0..close_count {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let line = vicaya_core::ipc::read_message(&mut reader)
+                    .unwrap()
+                    .unwrap();
+                requests.push(Request::from_json(&line).unwrap());
+                drop(reader);
+            }
+
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let line = vicaya_core::ipc::read_message(&mut reader)
+                .unwrap()
+                .unwrap();
+            requests.push(Request::from_json(&line).unwrap());
+            let mut json = response.to_json().unwrap();
+            json.push('\n');
+            stream.write_all(json.as_bytes()).unwrap();
+
+            requests
         })
     }
 
@@ -263,7 +334,11 @@ mod tests {
 
     #[test]
     fn empty_non_recent_search_returns_without_ipc() {
-        let mut client = IpcClient { stream: None };
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", dir.path());
+        let mut client = IpcClient::best_effort();
+        client.stream = None;
         let results = client.search("", 10, None, None, false).unwrap();
         assert!(results.is_empty());
     }
@@ -302,6 +377,65 @@ mod tests {
             handle.join().unwrap(),
             Request::Rebuild { dry_run: true }
         ));
+    }
+
+    #[test]
+    fn request_reconnects_when_daemon_closes_stale_stream() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", dir.path());
+        let handle = close_then_response_server(
+            dir.path(),
+            Response::Status {
+                pid: 99,
+                build: build_info(),
+                indexed_files: 42,
+                trigram_count: 777,
+                arena_size: 4096,
+                index_allocated_bytes: 8192,
+                state_allocated_bytes: 16384,
+                last_updated: 1_700_000_000,
+                reconciling: false,
+            },
+        );
+
+        let mut client = IpcClient::new();
+        let status = client.status().unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(status.indexed_files, 42);
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|req| matches!(req, Request::Status)));
+    }
+
+    #[test]
+    fn request_survives_short_daemon_restart_window() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", dir.path());
+        let handle = close_n_then_response_server(
+            dir.path(),
+            2,
+            Response::SearchResults {
+                results: vec![vicaya_core::ipc::SearchResult {
+                    path: "/tmp/repo/main.rs".to_string(),
+                    name: "main.rs".to_string(),
+                    score: 1.0,
+                    size: 12,
+                    mtime: 1_700_000_000,
+                }],
+            },
+        );
+
+        let mut client = IpcClient::new();
+        let results = client.search("main", 10, None, None, false).unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(requests.len(), 3);
+        assert!(requests
+            .iter()
+            .all(|req| matches!(req, Request::Search { query, .. } if query == "main")));
     }
 
     #[test]
