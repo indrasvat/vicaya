@@ -26,6 +26,9 @@ pub struct DaemonState {
     pub path_hasher: RandomState,
     pub path_to_id: std::collections::HashMap<u64, FileId>,
     pub path_hash_collisions: std::collections::HashMap<u64, Vec<FileId>>,
+    pub path_order: Vec<FileId>,
+    pub name_to_ids: std::collections::HashMap<String, Vec<FileId>>,
+    pub recent_order: Vec<FileId>,
     pub inode_to_id: std::collections::HashMap<(u64, u64), FileId>,
     pub last_updated: i64,
     pub reconciling: bool,
@@ -40,6 +43,9 @@ impl DaemonState {
     ) -> Self {
         let path_hasher = RandomState::new();
         let (path_to_id, path_hash_collisions) = build_path_map(&snapshot, &path_hasher);
+        let path_order = build_path_order(&snapshot);
+        let name_to_ids = build_name_map(&snapshot);
+        let recent_order = build_recent_order(&snapshot);
         let inode_to_id = build_inode_map(&snapshot);
         let last_updated = index_file
             .metadata()
@@ -57,6 +63,9 @@ impl DaemonState {
             path_hasher,
             path_to_id,
             path_hash_collisions,
+            path_order,
+            name_to_ids,
+            recent_order,
             inode_to_id,
             last_updated,
             reconciling: false,
@@ -107,6 +116,14 @@ impl DaemonState {
             + hash_map_allocated_bytes(&self.path_to_id)
             + hash_map_allocated_bytes(&self.path_hash_collisions)
             + collisions_vec_bytes
+            + self.path_order.capacity() * std::mem::size_of::<FileId>()
+            + hash_map_allocated_bytes(&self.name_to_ids)
+            + self
+                .name_to_ids
+                .values()
+                .map(|ids| ids.capacity() * std::mem::size_of::<FileId>())
+                .sum::<usize>()
+            + self.recent_order.capacity() * std::mem::size_of::<FileId>()
             + hash_map_allocated_bytes(&self.inode_to_id)) as u64
     }
 
@@ -163,6 +180,158 @@ impl DaemonState {
         self.path_to_id.remove(&hash);
         self.path_hash_collisions
             .insert(hash, vec![existing, file_id]);
+    }
+
+    fn insert_path_order(&mut self, file_id: FileId) {
+        let Some(path) = snapshot_path_for_id(&self.snapshot, file_id) else {
+            return;
+        };
+        if path.is_empty() {
+            return;
+        }
+
+        let pos = self.path_order.partition_point(|&id| {
+            snapshot_path_for_id(&self.snapshot, id).is_some_and(|existing| existing < path)
+        });
+        self.path_order.insert(pos, file_id);
+    }
+
+    fn remove_path_order(&mut self, file_id: FileId, path: &str) {
+        let start = self.path_order.partition_point(|&id| {
+            snapshot_path_for_id(&self.snapshot, id).is_some_and(|existing| existing < path)
+        });
+        let end = self.path_order[start..]
+            .partition_point(|&id| snapshot_path_for_id(&self.snapshot, id) == Some(path))
+            + start;
+
+        if let Some(pos) = self.path_order[start..end]
+            .iter()
+            .position(|&id| id == file_id)
+        {
+            self.path_order.remove(start + pos);
+        }
+    }
+
+    fn scoped_file_ids_up_to(&self, scope: &Path, max_ids: usize) -> Option<(Vec<FileId>, bool)> {
+        let (scope, scope_child_prefix) = normalized_scope_parts(scope)?;
+        let start = self.path_order.partition_point(|&id| {
+            snapshot_path_for_id(&self.snapshot, id).is_some_and(|path| path < scope.as_str())
+        });
+
+        let mut ids = Vec::new();
+        for &file_id in &self.path_order[start..] {
+            let Some(path) = snapshot_path_for_id(&self.snapshot, file_id) else {
+                continue;
+            };
+            if path_is_in_normalized_scope(path, &scope, &scope_child_prefix) {
+                ids.push(file_id);
+                if ids.len() > max_ids {
+                    return Some((ids, false));
+                }
+                continue;
+            }
+            if path > scope.as_str() && !path.starts_with(&scope_child_prefix) {
+                break;
+            }
+        }
+
+        Some((ids, true))
+    }
+
+    fn recent_file_ids_in_scope(&self, limit: usize, scope: &Path) -> Option<Vec<FileId>> {
+        let (scope, scope_child_prefix) = normalized_scope_parts(scope)?;
+        let mut ids = Vec::with_capacity(limit);
+
+        for &file_id in &self.recent_order {
+            let Some(path) = snapshot_path_for_id(&self.snapshot, file_id) else {
+                continue;
+            };
+            if path_is_in_normalized_scope(path, &scope, &scope_child_prefix) {
+                ids.push(file_id);
+                if ids.len() == limit {
+                    break;
+                }
+            }
+        }
+
+        Some(ids)
+    }
+
+    fn filter_file_ids_in_scope(&self, file_ids: &[FileId], scope: &Path) -> Option<Vec<FileId>> {
+        let (scope, scope_child_prefix) = normalized_scope_parts(scope)?;
+        Some(
+            file_ids
+                .iter()
+                .copied()
+                .filter(|&file_id| {
+                    snapshot_path_for_id(&self.snapshot, file_id).is_some_and(|path| {
+                        path_is_in_normalized_scope(path, &scope, &scope_child_prefix)
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn exact_name_file_ids(&self, query: &str) -> Option<Vec<FileId>> {
+        if !is_exact_basename_query(query) {
+            return None;
+        }
+        let key = query.to_lowercase();
+        self.name_to_ids.get(&key).cloned()
+    }
+
+    fn insert_name_mapping(&mut self, file_id: FileId) {
+        let Some(meta) = self.snapshot.file_table.get(file_id) else {
+            return;
+        };
+        let Some(name) = self
+            .snapshot
+            .string_arena
+            .get(meta.name_offset, meta.name_len)
+        else {
+            return;
+        };
+        if name.is_empty() {
+            return;
+        }
+        self.name_to_ids
+            .entry(name.to_lowercase())
+            .or_default()
+            .push(file_id);
+    }
+
+    fn remove_name_mapping(&mut self, file_id: FileId, name: &str) {
+        let key = name.to_lowercase();
+        let Some(ids) = self.name_to_ids.get_mut(&key) else {
+            return;
+        };
+        ids.retain(|&id| id != file_id);
+        if ids.is_empty() {
+            self.name_to_ids.remove(&key);
+        }
+    }
+
+    fn insert_recent_order(&mut self, file_id: FileId) {
+        let Some(meta) = self.snapshot.file_table.get(file_id) else {
+            return;
+        };
+        if meta.path_len == 0 || meta.name_len == 0 {
+            return;
+        }
+        let mtime = meta.mtime;
+        let pos = self.recent_order.partition_point(|&id| {
+            let Some(existing) = self.snapshot.file_table.get(id) else {
+                return false;
+            };
+            existing.mtime > mtime || (existing.mtime == mtime && id < file_id)
+        });
+        self.recent_order.insert(pos, file_id);
+    }
+
+    fn remove_recent_order(&mut self, file_id: FileId) {
+        if let Some(pos) = self.recent_order.iter().position(|&id| id == file_id) {
+            self.recent_order.remove(pos);
+        }
     }
 
     fn remove_path_mapping(&mut self, path: &str) -> Option<FileId> {
@@ -246,11 +415,28 @@ impl DaemonState {
         let inode_key = (dev, ino);
 
         if let Some(file_id) = self.get_file_id_for_path(path_str.as_ref()) {
+            let (old_inode_key, old_name) = {
+                let Some(meta) = self.snapshot.file_table.get(file_id) else {
+                    return;
+                };
+                let old_name = self
+                    .snapshot
+                    .string_arena
+                    .get(meta.name_offset, meta.name_len)
+                    .unwrap_or("")
+                    .to_string();
+                ((meta.dev, meta.ino), old_name)
+            };
+
+            self.remove_recent_order(file_id);
+            if old_name != name_str.as_ref() {
+                self.remove_name_mapping(file_id, &old_name);
+            }
+
             let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
                 return;
             };
 
-            let old_inode_key = (meta.dev, meta.ino);
             if old_inode_key != inode_key {
                 if self.inode_to_id.get(&old_inode_key) == Some(&file_id) {
                     self.inode_to_id.remove(&old_inode_key);
@@ -258,14 +444,8 @@ impl DaemonState {
                 self.inode_to_id.insert(inode_key, file_id);
             }
 
-            let old_name = self
-                .snapshot
-                .string_arena
-                .get(meta.name_offset, meta.name_len)
-                .unwrap_or("");
-
             if old_name != name_str.as_ref() {
-                self.snapshot.trigram_index.remove_text(file_id, old_name);
+                self.snapshot.trigram_index.remove_text(file_id, &old_name);
                 self.snapshot.trigram_index.add(file_id, name_str.as_ref());
 
                 let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
@@ -277,6 +457,11 @@ impl DaemonState {
             meta.mtime = mtime;
             meta.dev = dev;
             meta.ino = ino;
+
+            if old_name != name_str.as_ref() {
+                self.insert_name_mapping(file_id);
+            }
+            self.insert_recent_order(file_id);
         } else if let Some(&file_id) = self.inode_to_id.get(&inode_key) {
             // Same inode (dev+ino) already exists in the index under a different path; treat this
             // as a move/rename even if the watcher didn't report the old path.
@@ -304,6 +489,11 @@ impl DaemonState {
 
             if !old_path.is_empty() {
                 let _ = self.remove_path_mapping(&old_path);
+                self.remove_path_order(file_id, &old_path);
+            }
+            self.remove_recent_order(file_id);
+            if old_name != name_str.as_ref() {
+                self.remove_name_mapping(file_id, &old_name);
             }
 
             let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
@@ -328,6 +518,11 @@ impl DaemonState {
             meta.ino = ino;
 
             self.insert_path_mapping(path_str.as_ref(), file_id);
+            self.insert_path_order(file_id);
+            if old_name != name_str.as_ref() {
+                self.insert_name_mapping(file_id);
+            }
+            self.insert_recent_order(file_id);
         } else {
             let (path_offset, path_len) = self.snapshot.string_arena.add(path_str.as_ref());
             let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
@@ -346,6 +541,9 @@ impl DaemonState {
             let file_id = self.snapshot.file_table.insert(new_meta);
             self.snapshot.trigram_index.add(file_id, name_str.as_ref());
             self.insert_path_mapping(path_str.as_ref(), file_id);
+            self.insert_path_order(file_id);
+            self.insert_name_mapping(file_id);
+            self.insert_recent_order(file_id);
             self.inode_to_id.insert(inode_key, file_id);
         }
 
@@ -357,26 +555,36 @@ impl DaemonState {
         let Some(file_id) = self.remove_path_mapping(path_str.as_ref()) else {
             return;
         };
+        self.remove_path_order(file_id, path_str.as_ref());
+        self.remove_recent_order(file_id);
 
         self.tombstone_file(file_id);
     }
 
     fn tombstone_file(&mut self, file_id: FileId) {
-        let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
-            return;
+        let (inode_key, old_name) = {
+            let Some(meta) = self.snapshot.file_table.get(file_id) else {
+                return;
+            };
+            let old_name = self
+                .snapshot
+                .string_arena
+                .get(meta.name_offset, meta.name_len)
+                .unwrap_or("")
+                .to_string();
+            ((meta.dev, meta.ino), old_name)
         };
 
-        let inode_key = (meta.dev, meta.ino);
         if inode_key != (0, 0) && self.inode_to_id.get(&inode_key) == Some(&file_id) {
             self.inode_to_id.remove(&inode_key);
         }
 
-        let old_name = self
-            .snapshot
-            .string_arena
-            .get(meta.name_offset, meta.name_len)
-            .unwrap_or("");
-        self.snapshot.trigram_index.remove_text(file_id, old_name);
+        self.snapshot.trigram_index.remove_text(file_id, &old_name);
+        self.remove_name_mapping(file_id, &old_name);
+
+        let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
+            return;
+        };
 
         // Tombstone the entry (keeps IDs stable).
         meta.path_len = 0;
@@ -394,6 +602,8 @@ impl DaemonState {
             self.upsert_path(to);
             return;
         };
+        self.remove_path_order(file_id, from_str.as_ref());
+        self.remove_recent_order(file_id);
 
         if !self.should_index(to) {
             self.tombstone_file(file_id);
@@ -441,25 +651,35 @@ impl DaemonState {
             .filter(|&existing_id| existing_id != file_id)
         {
             let _ = self.remove_path_mapping(to_str.as_ref());
+            self.remove_path_order(overwritten_id, to_str.as_ref());
+            self.remove_recent_order(overwritten_id);
             self.tombstone_file(overwritten_id);
+        }
+
+        let (old_inode_key, old_name) = {
+            let Some(meta) = self.snapshot.file_table.get(file_id) else {
+                return;
+            };
+            let old_name = self
+                .snapshot
+                .string_arena
+                .get(meta.name_offset, meta.name_len)
+                .unwrap_or("")
+                .to_string();
+            ((meta.dev, meta.ino), old_name)
+        };
+
+        if old_name != name_str.as_ref() {
+            self.remove_name_mapping(file_id, &old_name);
+            self.snapshot.trigram_index.remove_text(file_id, &old_name);
+            self.snapshot.trigram_index.add(file_id, name_str.as_ref());
         }
 
         let Some(meta) = self.snapshot.file_table.get_mut(file_id) else {
             return;
         };
 
-        let old_inode_key = (meta.dev, meta.ino);
-
-        let old_name = self
-            .snapshot
-            .string_arena
-            .get(meta.name_offset, meta.name_len)
-            .unwrap_or("");
-
         if old_name != name_str.as_ref() {
-            self.snapshot.trigram_index.remove_text(file_id, old_name);
-            self.snapshot.trigram_index.add(file_id, name_str.as_ref());
-
             let (name_offset, name_len) = self.snapshot.string_arena.add(name_str.as_ref());
             meta.name_offset = name_offset;
             meta.name_len = name_len;
@@ -485,8 +705,38 @@ impl DaemonState {
         }
 
         self.insert_path_mapping(to_str.as_ref(), file_id);
+        self.insert_path_order(file_id);
+        if old_name != name_str.as_ref() {
+            self.insert_name_mapping(file_id);
+        }
+        self.insert_recent_order(file_id);
         self.last_updated = now_epoch_seconds();
     }
+}
+
+fn normalized_scope_parts(scope: &Path) -> Option<(String, String)> {
+    let scope = scope.to_str()?.trim_end_matches('/');
+    let scope = if scope.is_empty() {
+        "/".to_string()
+    } else {
+        scope.to_string()
+    };
+    let scope_child_prefix = if scope == "/" {
+        "/".to_string()
+    } else {
+        format!("{scope}/")
+    };
+    Some((scope, scope_child_prefix))
+}
+
+fn path_is_in_normalized_scope(path: &str, scope: &str, scope_child_prefix: &str) -> bool {
+    path == scope || path.starts_with(scope_child_prefix)
+}
+
+fn is_exact_basename_query(query: &str) -> bool {
+    !query.is_empty()
+        && query.bytes().any(|b| matches!(b, b'.' | b'-' | b'_'))
+        && !query.bytes().any(|b| matches!(b, b'/' | b'\\'))
 }
 
 fn now_epoch_seconds() -> i64 {
@@ -564,6 +814,50 @@ fn build_inode_map(snapshot: &IndexSnapshot) -> std::collections::HashMap<(u64, 
         map.insert((meta.dev, meta.ino), file_id);
     }
     map
+}
+
+fn build_path_order(snapshot: &IndexSnapshot) -> Vec<FileId> {
+    let mut ids: Vec<FileId> = snapshot
+        .file_table
+        .iter()
+        .filter_map(|(file_id, meta)| (meta.path_len > 0).then_some(file_id))
+        .collect();
+    ids.sort_unstable_by(|&a, &b| {
+        let a_path = snapshot_path_for_id(snapshot, a).unwrap_or("");
+        let b_path = snapshot_path_for_id(snapshot, b).unwrap_or("");
+        a_path.cmp(b_path).then_with(|| a.cmp(&b))
+    });
+    ids
+}
+
+fn build_name_map(snapshot: &IndexSnapshot) -> std::collections::HashMap<String, Vec<FileId>> {
+    let mut map = std::collections::HashMap::<String, Vec<FileId>>::new();
+    for (file_id, meta) in snapshot.file_table.iter() {
+        if meta.name_len == 0 || meta.path_len == 0 {
+            continue;
+        }
+        let Some(name) = snapshot.string_arena.get(meta.name_offset, meta.name_len) else {
+            continue;
+        };
+        map.entry(name.to_lowercase()).or_default().push(file_id);
+    }
+    map
+}
+
+fn build_recent_order(snapshot: &IndexSnapshot) -> Vec<FileId> {
+    let mut ids: Vec<FileId> = snapshot
+        .file_table
+        .iter()
+        .filter_map(|(file_id, meta)| (meta.path_len > 0 && meta.name_len > 0).then_some(file_id))
+        .collect();
+    ids.sort_unstable_by(|&a, &b| {
+        let a_meta = snapshot.file_table.get(a);
+        let b_meta = snapshot.file_table.get(b);
+        let a_mtime = a_meta.map(|m| m.mtime).unwrap_or_default();
+        let b_mtime = b_meta.map(|m| m.mtime).unwrap_or_default();
+        b_mtime.cmp(&a_mtime).then_with(|| a.cmp(&b))
+    });
+    ids
 }
 
 fn journal_len(path: &Path) -> u64 {
@@ -661,38 +955,37 @@ pub fn full_rebuild_from_disk(
         };
 
         info!("Starting full index rebuild from disk...");
-        let scanner = Scanner::new(config);
+        let scanner = Scanner::new(config.clone());
         let snapshot = scanner.scan()?;
         let files_indexed = snapshot.file_table.len();
 
-        // Finalize: swap snapshot, apply any watcher updates that happened during the scan,
-        // then persist a fresh snapshot and clear the journal.
-        {
-            let mut state = state.write().unwrap();
-            let _journal_guard = journal_lock.lock().unwrap();
-
-            state.snapshot = snapshot;
-            let (path_to_id, path_hash_collisions) =
-                build_path_map(&state.snapshot, &state.path_hasher);
-            state.path_to_id = path_to_id;
-            state.path_hash_collisions = path_hash_collisions;
-            state.inode_to_id = build_inode_map(&state.snapshot);
-            state.last_updated = now_epoch_seconds();
-
+        // Finalize without holding the shared state write lock for expensive work.
+        // Holding the journal lock blocks watcher writes, but search/status can keep
+        // reading the previous hot snapshot until the final pointer-sized swap.
+        let _journal_guard = journal_lock.lock().unwrap();
+        let applied_updates = {
+            let mut rebuilt =
+                DaemonState::new(config, index_file.clone(), journal_file.clone(), snapshot);
             let applied_updates = apply_journal_from_offset(&journal_file, journal_offset, |u| {
-                state.apply_update(u);
+                rebuilt.apply_update(u);
             });
             if applied_updates > 0 {
                 debug!("Applied {} journal updates after rebuild", applied_updates);
             }
 
-            state.snapshot.save(&index_file)?;
+            rebuilt.snapshot.save(&index_file)?;
             truncate_journal(&journal_file)?;
+            rebuilt.reconciling = false;
 
-            state.reconciling = false;
-        }
+            let mut state = state.write().unwrap();
+            *state = rebuilt;
+            applied_updates
+        };
 
         info!("Full rebuild complete: {} files indexed", files_indexed);
+        if applied_updates > 0 {
+            debug!("Full rebuild included {} journal updates", applied_updates);
+        }
 
         Ok(files_indexed)
     })();
@@ -708,6 +1001,12 @@ pub fn full_rebuild_from_disk(
 /// IPC server that handles client connections.
 pub struct IpcServer {
     listener: UnixListener,
+    handler: IpcHandler,
+    socket_path: PathBuf,
+}
+
+#[derive(Clone)]
+struct IpcHandler {
     state: SharedState,
     shutdown: Arc<AtomicBool>,
     socket_path: PathBuf,
@@ -750,33 +1049,34 @@ impl IpcServer {
         listener
             .set_nonblocking(true)
             .map_err(|e| vicaya_core::Error::Ipc(format!("Failed to set nonblocking: {}", e)))?;
-
         info!("IPC server listening on {}", socket_path.display());
 
         Ok(Self {
             listener,
-            state,
-            shutdown,
             socket_path: socket_path.to_path_buf(),
-            journal_lock,
-            rebuild_lock,
+            handler: IpcHandler {
+                state,
+                shutdown,
+                socket_path: socket_path.to_path_buf(),
+                journal_lock,
+                rebuild_lock,
+            },
         })
     }
 
     /// Run the server loop.
     pub fn run(&self) -> Result<()> {
-        while !self.shutdown.load(Ordering::Relaxed) {
+        while !self.handler.shutdown.load(Ordering::Relaxed) {
             match self.listener.accept() {
                 Ok((stream, _addr)) => {
-                    // The listener is non-blocking, but client streams should be blocking so we can
-                    // read full newline-delimited requests and write full JSON responses.
                     if let Err(e) = stream.set_nonblocking(false) {
                         error!("Failed to set client stream blocking mode: {}", e);
                     }
-                    self.handle_client(stream);
+                    let handler = self.handler.clone();
+                    std::thread::spawn(move || handler.handle_client(stream));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 Err(e) => {
                     error!("Failed to accept connection: {}", e);
@@ -787,38 +1087,51 @@ impl IpcServer {
 
         Ok(())
     }
+}
 
+impl IpcHandler {
     /// Handle a single client connection.
     fn handle_client(&self, mut stream: UnixStream) {
         let peer_addr = stream.peer_addr().ok();
         debug!("Client connected: {:?}", peer_addr);
 
         let mut reader = BufReader::new(stream.try_clone().unwrap());
-        match vicaya_core::ipc::read_message(&mut reader) {
-            Ok(None) => debug!("Client disconnected"),
-            Ok(Some(line)) => {
-                let request = match Request::from_json(&line) {
-                    Ok(req) => req,
-                    Err(e) => {
-                        error!("Failed to parse request: {}", e);
-                        let response = Response::Error {
-                            message: format!("Invalid request: {}", e),
-                        };
-                        self.send_response(&mut stream, &response);
+
+        loop {
+            match vicaya_core::ipc::read_message(&mut reader) {
+                Ok(None) => {
+                    debug!("Client disconnected");
+                    return;
+                }
+                Ok(Some(line)) => {
+                    let request = match Request::from_json(&line) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            error!("Failed to parse request: {}", e);
+                            let response = Response::Error {
+                                message: format!("Invalid request: {}", e),
+                            };
+                            self.send_response(&mut stream, &response);
+                            return;
+                        }
+                    };
+
+                    debug!("Received request: {:?}", request);
+                    let response = self.handle_request(request);
+                    self.send_response(&mut stream, &response);
+
+                    if self.shutdown.load(Ordering::Relaxed) {
                         return;
                     }
-                };
-
-                debug!("Received request: {:?}", request);
-                let response = self.handle_request(request);
-                self.send_response(&mut stream, &response);
-            }
-            Err(e) => {
-                error!("Failed to read from client: {}", e);
-                let response = Response::Error {
-                    message: e.to_string(),
-                };
-                self.send_response(&mut stream, &response);
+                }
+                Err(e) => {
+                    error!("Failed to read from client: {}", e);
+                    let response = Response::Error {
+                        message: e.to_string(),
+                    };
+                    self.send_response(&mut stream, &response);
+                    return;
+                }
             }
         }
     }
@@ -846,10 +1159,43 @@ impl IpcServer {
                 let filter_scope_path = filter_scope
                     .filter(|s| !s.trim().is_empty())
                     .map(std::path::PathBuf::from);
+                const SCOPED_LINEAR_SEARCH_LIMIT: usize = 100_000;
+                let scoped_file_ids = filter_scope_path.as_deref().and_then(|scope| {
+                    state.scoped_file_ids_up_to(scope, SCOPED_LINEAR_SEARCH_LIMIT)
+                });
+                let exact_name_file_ids = state.exact_name_file_ids(&query).map(|ids| {
+                    if let Some(scope) = filter_scope_path.as_deref() {
+                        state
+                            .filter_file_ids_in_scope(&ids, scope)
+                            .unwrap_or_default()
+                    } else {
+                        ids
+                    }
+                });
 
                 // If query is empty and recent_if_empty is true, return recent files
                 let results = if query.trim().is_empty() && recent_if_empty {
-                    engine.recent_files(limit, filter_scope_path.as_deref())
+                    if let Some((file_ids, true)) = scoped_file_ids.as_ref() {
+                        engine.recent_file_ids(limit, file_ids)
+                    } else if let Some(scope) = filter_scope_path.as_deref() {
+                        let file_ids = state
+                            .recent_file_ids_in_scope(limit, scope)
+                            .unwrap_or_default();
+                        engine.recent_file_ids(limit, &file_ids)
+                    } else {
+                        let end = state.recent_order.len().min(limit);
+                        engine.recent_file_ids(limit, &state.recent_order[..end])
+                    }
+                } else if let Some(file_ids) = exact_name_file_ids.as_deref() {
+                    engine.exact_name_file_ids(limit, file_ids)
+                } else if let Some((file_ids, true)) = scoped_file_ids.as_ref() {
+                    let query_obj = Query {
+                        term: query,
+                        limit,
+                        scope: scope_path,
+                        filter_scope: filter_scope_path,
+                    };
+                    engine.search_file_ids(&query_obj, file_ids)
                 } else {
                     let query_obj = Query {
                         term: query,
@@ -922,6 +1268,7 @@ impl IpcServer {
             Request::Shutdown => {
                 info!("Shutdown requested");
                 self.shutdown.store(true, Ordering::Relaxed);
+                let _ = UnixStream::connect(&self.socket_path);
                 Response::Ok
             }
         }
@@ -941,6 +1288,13 @@ impl IpcServer {
                 error!("Failed to serialize response: {}", e);
             }
         }
+    }
+}
+
+impl IpcServer {
+    #[cfg(test)]
+    fn handle_request(&self, request: Request) -> Response {
+        self.handler.handle_request(request)
     }
 }
 
@@ -1227,6 +1581,125 @@ mod tests {
             server.handle_request(Request::Shutdown),
             Response::Ok
         ));
+        assert!(shutdown.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn scoped_file_ids_up_to_reports_incomplete_large_scope() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        std::fs::write(root.path().join("a.txt"), "a").unwrap();
+        std::fs::write(root.path().join("b.txt"), "b").unwrap();
+        std::fs::write(root.path().join("c.txt"), "c").unwrap();
+
+        let state = build_state(root.path(), vicaya_dir.path());
+        let (ids, complete) = state.scoped_file_ids_up_to(root.path(), 1).unwrap();
+
+        assert!(!complete);
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn exact_name_search_is_filtered_inside_scope() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let inside_dir = root.path().join("inside");
+        let outside_dir = root.path().join("outside");
+        std::fs::create_dir_all(&inside_dir).unwrap();
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let inside = inside_dir.join("main.go");
+        let outside = outside_dir.join("main.go");
+        std::fs::write(&inside, "package main\n").unwrap();
+        std::fs::write(&outside, "package main\n").unwrap();
+
+        let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let journal_lock = Arc::new(Mutex::new(()));
+        let rebuild_lock = Arc::new(Mutex::new(()));
+        let socket = vicaya_dir.path().join("daemon.sock");
+        let server = IpcServer::new(&socket, state, shutdown, journal_lock, rebuild_lock).unwrap();
+
+        match server.handle_request(Request::Search {
+            query: "main.go".to_string(),
+            limit: 10,
+            scope: Some(inside_dir.to_string_lossy().to_string()),
+            filter_scope: Some(inside_dir.to_string_lossy().to_string()),
+            recent_if_empty: false,
+        }) {
+            Response::SearchResults { results } => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].path, inside.to_string_lossy());
+            }
+            other => panic!("unexpected exact scoped search response: {other:?}"),
+        }
+
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn ipc_server_accepts_persistent_client_requests() {
+        use std::io::Write as _;
+        use std::os::unix::net::UnixStream;
+
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let cargo = root.path().join("Cargo.toml");
+        std::fs::write(&cargo, "[package]\n").unwrap();
+
+        let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let journal_lock = Arc::new(Mutex::new(()));
+        let rebuild_lock = Arc::new(Mutex::new(()));
+        let socket = vicaya_dir.path().join("daemon.sock");
+        let server =
+            IpcServer::new(&socket, state, shutdown.clone(), journal_lock, rebuild_lock).unwrap();
+        let server_thread = std::thread::spawn(move || server.run().unwrap());
+
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+
+        let send = |stream: &mut UnixStream, request: Request| {
+            let mut json = request.to_json().unwrap();
+            json.push('\n');
+            stream.write_all(json.as_bytes()).unwrap();
+        };
+
+        send(&mut stream, Request::Status);
+        let line = vicaya_core::ipc::read_message(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            Response::from_json(&line).unwrap(),
+            Response::Status { .. }
+        ));
+
+        send(
+            &mut stream,
+            Request::Search {
+                query: "Cargo".to_string(),
+                limit: 10,
+                scope: Some(root.path().to_string_lossy().to_string()),
+                filter_scope: Some(root.path().to_string_lossy().to_string()),
+                recent_if_empty: false,
+            },
+        );
+        let line = vicaya_core::ipc::read_message(&mut reader)
+            .unwrap()
+            .unwrap();
+        match Response::from_json(&line).unwrap() {
+            Response::SearchResults { results } => assert_eq!(results.len(), 1),
+            other => panic!("unexpected persistent search response: {other:?}"),
+        }
+
+        send(&mut stream, Request::Shutdown);
+        let line = vicaya_core::ipc::read_message(&mut reader)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(Response::from_json(&line).unwrap(), Response::Ok));
+
+        drop(reader);
+        drop(stream);
+        server_thread.join().unwrap();
         assert!(shutdown.load(Ordering::Relaxed));
     }
 }

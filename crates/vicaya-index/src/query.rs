@@ -2,7 +2,8 @@
 
 use crate::{AbbreviationMatcher, FileId, FileTable, StringArena, Trigram, TrigramIndex};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
 /// A search query.
@@ -77,19 +78,37 @@ impl<'a> QueryEngine<'a> {
         let trigrams = Trigram::extract(&normalized);
         let candidates = self.trigram_index.query(&trigrams);
 
-        // Score and filter candidates
-        let mut ranked: Vec<(SearchResult, RankFeatures)> = candidates
-            .iter()
-            .filter_map(|&file_id| {
+        let mut ranked: Vec<(SearchResult, RankFeatures)> = Vec::with_capacity(query.limit);
+        for file_id in candidates {
+            if let Some(result) =
                 self.score_candidate(file_id, &normalized, boost_scope, filter_scope, cwd)
-            })
-            .collect();
-
+            {
+                self.push_ranked_candidate(&mut ranked, result, query.limit);
+            }
+        }
         self.sort_ranked_results(&mut ranked);
-
-        // Limit results
-        ranked.truncate(query.limit);
         ranked.into_iter().map(|(r, _)| r).collect()
+    }
+
+    /// Execute a query against a pre-filtered set of file IDs.
+    ///
+    /// This is intended for daemon-side scope accelerators where enumerating a small
+    /// subtree is cheaper than probing global posting lists and filtering afterward.
+    pub fn search_file_ids(&self, query: &Query, file_ids: &[FileId]) -> Vec<SearchResult> {
+        let normalized = query.term.to_lowercase();
+        let boost_scope = query.scope.as_deref();
+        let filter_scope = query.filter_scope.as_deref();
+        let cwd = std::env::current_dir().ok();
+        let cwd = cwd.as_deref();
+
+        self.search_file_ids_normalized(
+            &normalized,
+            boost_scope,
+            filter_scope,
+            cwd,
+            query.limit,
+            file_ids,
+        )
     }
 
     /// Score a candidate file.
@@ -113,23 +132,24 @@ impl<'a> QueryEngine<'a> {
             }
         }
 
-        // Check if the query matches the basename or path
-        let name_lower = name.to_lowercase();
-        let path_lower = path.to_lowercase();
-
-        // Try abbreviation matching first (especially for short queries)
-        let abbr_matcher = AbbreviationMatcher::new();
-        let abbr_score = if let Some(abbr_match) = abbr_matcher.match_path(query, path) {
-            Some(abbr_match.score)
-        } else {
-            None
-        };
+        let name_lower = lower_if_needed(name);
+        let path_lower = lower_if_needed(path);
 
         // Try traditional substring matching
-        let substring_score = if name_lower.contains(query) || path_lower.contains(query) {
-            Some(self.calculate_score(&name_lower, &path_lower, query))
-        } else {
+        let substring_score =
+            if name_lower.as_ref().contains(query) || path_lower.as_ref().contains(query) {
+                Some(self.calculate_score(name_lower.as_ref(), path_lower.as_ref(), query))
+            } else {
+                None
+            };
+
+        let abbr_score = if substring_score == Some(1.0) || is_literal_filename_query(query) {
             None
+        } else {
+            let abbr_matcher = AbbreviationMatcher::new();
+            abbr_matcher
+                .match_path(query, path)
+                .map(|abbr_match| abbr_match.score)
         };
 
         // Use the best score from either method
@@ -142,7 +162,7 @@ impl<'a> QueryEngine<'a> {
 
         let path_depth = Self::path_depth(path);
         let features = RankFeatures {
-            context_score: Self::context_score(&path_lower)
+            context_score: Self::context_score(path_lower.as_ref())
                 + Self::scope_boost(path_buf, boost_scope, cwd),
             path_depth,
         };
@@ -212,6 +232,32 @@ impl<'a> QueryEngine<'a> {
                 break;
             }
 
+            if let Some(result) =
+                self.score_candidate(file_id, query, boost_scope, filter_scope, cwd)
+            {
+                self.push_ranked_candidate(&mut ranked, result, limit);
+            }
+        }
+
+        self.sort_ranked_results(&mut ranked);
+        ranked.into_iter().map(|(r, _)| r).collect()
+    }
+
+    fn search_file_ids_normalized(
+        &self,
+        query: &str,
+        boost_scope: Option<&Path>,
+        filter_scope: Option<&Path>,
+        cwd: Option<&Path>,
+        limit: usize,
+        file_ids: &[FileId],
+    ) -> Vec<SearchResult> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let mut ranked: Vec<(SearchResult, RankFeatures)> = Vec::with_capacity(limit);
+        for &file_id in file_ids {
             if let Some(result) =
                 self.score_candidate(file_id, query, boost_scope, filter_scope, cwd)
             {
@@ -359,51 +405,154 @@ impl<'a> QueryEngine<'a> {
     /// Returns the N most recently modified files, optionally filtered by scope.
     /// Used for populating TUI on startup when no query is provided.
     pub fn recent_files(&self, limit: usize, filter_scope: Option<&Path>) -> Vec<SearchResult> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
         let cwd = std::env::current_dir().ok();
         let cwd = cwd.as_deref();
 
-        // Collect entries with their mtime for sorting
-        let mut entries: Vec<(i64, SearchResult)> = self
-            .file_table
-            .iter()
-            .filter_map(|(_file_id, meta)| {
+        let mut heap: BinaryHeap<Reverse<RecentCandidate>> = BinaryHeap::with_capacity(limit + 1);
+
+        for (file_id, meta) in self.file_table.iter() {
+            let Some(path) = self.string_arena.get(meta.path_offset, meta.path_len) else {
+                continue;
+            };
+            let Some(name) = self.string_arena.get(meta.name_offset, meta.name_len) else {
+                continue;
+            };
+
+            // Skip tombstones and entries with empty names (e.g., root directories).
+            if name.is_empty() {
+                continue;
+            }
+
+            if let Some(scope_path) = filter_scope {
+                if !Self::scope_contains(Path::new(path), scope_path, cwd) {
+                    continue;
+                }
+            }
+
+            heap.push(Reverse(RecentCandidate {
+                mtime: meta.mtime,
+                file_id,
+            }));
+            if heap.len() > limit {
+                heap.pop();
+            }
+        }
+
+        let mut candidates: Vec<RecentCandidate> = heap
+            .into_iter()
+            .map(|Reverse(candidate)| candidate)
+            .collect();
+        candidates.sort_by(|a, b| {
+            b.mtime
+                .cmp(&a.mtime)
+                .then_with(|| a.file_id.cmp(&b.file_id))
+        });
+
+        candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                let meta = self.file_table.get(candidate.file_id)?;
                 let path = self.string_arena.get(meta.path_offset, meta.path_len)?;
                 let name = self.string_arena.get(meta.name_offset, meta.name_len)?;
+                Some(SearchResult {
+                    path: path.to_string(),
+                    name: name.to_string(),
+                    score: 0.0,
+                    size: meta.size,
+                    mtime: meta.mtime,
+                })
+            })
+            .collect()
+    }
 
-                // Skip entries with empty names (e.g., root directories)
+    /// Returns the N most recently modified files from a pre-filtered set of file IDs.
+    pub fn recent_file_ids(&self, limit: usize, file_ids: &[FileId]) -> Vec<SearchResult> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let mut heap: BinaryHeap<Reverse<RecentCandidate>> = BinaryHeap::with_capacity(limit + 1);
+
+        for &file_id in file_ids {
+            let Some(meta) = self.file_table.get(file_id) else {
+                continue;
+            };
+            let Some(name) = self.string_arena.get(meta.name_offset, meta.name_len) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+
+            heap.push(Reverse(RecentCandidate {
+                mtime: meta.mtime,
+                file_id,
+            }));
+            if heap.len() > limit {
+                heap.pop();
+            }
+        }
+
+        let mut candidates: Vec<RecentCandidate> = heap
+            .into_iter()
+            .map(|Reverse(candidate)| candidate)
+            .collect();
+        candidates.sort_by(|a, b| {
+            b.mtime
+                .cmp(&a.mtime)
+                .then_with(|| a.file_id.cmp(&b.file_id))
+        });
+
+        candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                let meta = self.file_table.get(candidate.file_id)?;
+                let path = self.string_arena.get(meta.path_offset, meta.path_len)?;
+                let name = self.string_arena.get(meta.name_offset, meta.name_len)?;
+                Some(SearchResult {
+                    path: path.to_string(),
+                    name: name.to_string(),
+                    score: 0.0,
+                    size: meta.size,
+                    mtime: meta.mtime,
+                })
+            })
+            .collect()
+    }
+
+    /// Returns exact-basename matches from a daemon-maintained name index.
+    pub fn exact_name_file_ids(&self, limit: usize, file_ids: &[FileId]) -> Vec<SearchResult> {
+        let mut results: Vec<SearchResult> = file_ids
+            .iter()
+            .filter_map(|&file_id| {
+                let meta = self.file_table.get(file_id)?;
+                let path = self.string_arena.get(meta.path_offset, meta.path_len)?;
+                let name = self.string_arena.get(meta.name_offset, meta.name_len)?;
                 if name.is_empty() {
                     return None;
                 }
-
-                // Filter by scope if provided
-                if let Some(scope_path) = filter_scope {
-                    if !Self::scope_contains(Path::new(path), scope_path, cwd) {
-                        return None;
-                    }
-                }
-
-                Some((
-                    meta.mtime,
-                    SearchResult {
-                        path: path.to_string(),
-                        name: name.to_string(),
-                        score: 0.0, // No query match, just recency
-                        size: meta.size,
-                        mtime: meta.mtime,
-                    },
-                ))
+                Some(SearchResult {
+                    path: path.to_string(),
+                    name: name.to_string(),
+                    score: 1.0,
+                    size: meta.size,
+                    mtime: meta.mtime,
+                })
             })
             .collect();
 
-        // Sort by mtime descending (most recent first)
-        entries.sort_by(|(mtime_a, _), (mtime_b, _)| mtime_b.cmp(mtime_a));
-
-        // Take top N
-        entries
-            .into_iter()
-            .take(limit)
-            .map(|(_, result)| result)
-            .collect()
+        results.sort_by(|a, b| {
+            b.mtime
+                .cmp(&a.mtime)
+                .then_with(|| path_depth_str(&a.path).cmp(&path_depth_str(&b.path)))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        results.truncate(limit);
+        results
     }
 
     fn scope_contains(path: &Path, scope: &Path, cwd: Option<&Path>) -> bool {
@@ -446,6 +595,44 @@ impl<'a> QueryEngine<'a> {
             }
         }
         normalized
+    }
+}
+
+fn lower_if_needed(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.bytes().all(|b| !b.is_ascii_uppercase()) {
+        std::borrow::Cow::Borrowed(text)
+    } else {
+        std::borrow::Cow::Owned(text.to_lowercase())
+    }
+}
+
+fn is_literal_filename_query(query: &str) -> bool {
+    query
+        .bytes()
+        .any(|b| matches!(b, b'.' | b'-' | b'_' | b'/' | b'\\'))
+}
+
+fn path_depth_str(path: &str) -> usize {
+    std::path::Path::new(path).components().count()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecentCandidate {
+    mtime: i64,
+    file_id: FileId,
+}
+
+impl Ord for RecentCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.mtime
+            .cmp(&other.mtime)
+            .then_with(|| other.file_id.cmp(&self.file_id))
+    }
+}
+
+impl PartialOrd for RecentCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

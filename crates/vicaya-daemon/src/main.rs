@@ -266,7 +266,7 @@ fn start_reconcile_thread(
                 if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
-                let step = std::cmp::min(std::time::Duration::from_secs(5), sleep_for - slept);
+                let step = std::cmp::min(std::time::Duration::from_millis(250), sleep_for - slept);
                 std::thread::sleep(step);
                 slept += step;
             }

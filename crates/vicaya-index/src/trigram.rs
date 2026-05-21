@@ -52,7 +52,15 @@ impl TrigramIndex {
         unique_trigrams.dedup();
 
         for trigram in unique_trigrams {
-            self.index.entry(trigram).or_default().push(file_id);
+            let posting_list = self.index.entry(trigram).or_default();
+            if posting_list.last().is_some_and(|&last| last > file_id) {
+                match posting_list.binary_search(&file_id) {
+                    Ok(_) => {}
+                    Err(pos) => posting_list.insert(pos, file_id),
+                }
+            } else if posting_list.last() != Some(&file_id) {
+                posting_list.push(file_id);
+            }
         }
     }
 
@@ -94,26 +102,28 @@ impl TrigramIndex {
             return Vec::new();
         }
 
-        // Find the smallest posting list
-        let smallest = trigrams
-            .iter()
-            .filter_map(|t| self.index.get(t))
-            .min_by_key(|list| list.len());
+        let mut unique_trigrams = trigrams.to_vec();
+        unique_trigrams.sort_unstable();
+        unique_trigrams.dedup();
 
-        let Some(candidates) = smallest else {
+        let mut posting_lists: Vec<&Vec<FileId>> = Vec::with_capacity(unique_trigrams.len());
+        for trigram in &unique_trigrams {
+            let Some(list) = self.index.get(trigram) else {
+                return Vec::new();
+            };
+            posting_lists.push(list);
+        }
+        posting_lists.sort_unstable_by_key(|list| list.len());
+
+        let Some((smallest, rest)) = posting_lists.split_first() else {
             return Vec::new();
         };
 
-        // Filter candidates that contain all trigrams
-        candidates
+        // Filter candidates that contain all trigrams. Posting lists are kept sorted by FileId,
+        // so membership checks stay logarithmic even for very common filename trigrams.
+        smallest
             .iter()
-            .filter(|&&file_id| {
-                trigrams.iter().all(|t| {
-                    self.index
-                        .get(t)
-                        .is_some_and(|list| list.contains(&file_id))
-                })
-            })
+            .filter(|&&file_id| rest.iter().all(|list| list.binary_search(&file_id).is_ok()))
             .copied()
             .collect()
     }
@@ -167,5 +177,18 @@ mod tests {
         assert!(results.contains(&FileId(1)));
         assert!(results.contains(&FileId(3)));
         assert!(!results.contains(&FileId(2)));
+    }
+
+    #[test]
+    fn posting_lists_stay_sorted_when_updated_out_of_order() {
+        let mut index = TrigramIndex::new();
+
+        index.add(FileId(3), "hello");
+        index.add(FileId(1), "hello");
+        index.add(FileId(2), "hello");
+        index.add(FileId(2), "hello");
+
+        let results = index.query(&Trigram::extract("hel"));
+        assert_eq!(results, vec![FileId(1), FileId(2), FileId(3)]);
     }
 }

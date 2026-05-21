@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Uses u32 to support up to 4.2 billion files while minimizing memory usage.
 /// This is more than sufficient for any single-machine filesystem indexer.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FileId(pub u32);
 
 /// Metadata for a single file entry.
