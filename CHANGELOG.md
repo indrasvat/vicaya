@@ -6,6 +6,13 @@
 * **release:** support workspace version inheritance ([8bb0ea6](https://github.com/indrasvat/vicaya/commit/8bb0ea632c5a2e9fc01504839fb997895f29a9d7))
 * **release:** use release pr workflow ([b868bdb](https://github.com/indrasvat/vicaya/commit/b868bdbbb1567def7ec22fd78dd9e934ea14f164))
 
+## [1.2.4](https://github.com/indrasvat/vicaya/compare/v1.2.3...v1.2.4) (2026-05-21)
+
+
+### Bug Fixes
+
+* **tui:** keep home searches responsive ([6b6b835](https://github.com/indrasvat/vicaya/commit/6b6b83524a2486f8120f01565095497a80c464b2))
+
 ## [1.2.3](https://github.com/indrasvat/vicaya/compare/v1.2.2...v1.2.3) (2026-05-21)
 
 
