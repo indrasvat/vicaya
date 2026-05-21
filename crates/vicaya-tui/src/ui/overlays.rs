@@ -273,8 +273,7 @@ pub fn render_kriya_suchi(f: &mut Frame, app: &AppState) {
 
 pub fn render_preview_search(f: &mut Frame, app: &AppState) {
     let root = f.area();
-    let width = ((root.width as f32) * 0.72) as u16;
-    let width = width.clamp(40, root.width.saturating_sub(2));
+    let width = overlay_width(root, 0.72, 40, 2);
     let height = 5u16;
     let area = centered_fixed_rect(width, height, root);
 
@@ -305,9 +304,19 @@ pub fn render_preview_search(f: &mut Frame, app: &AppState) {
     f.render_widget(input, area);
 
     let cursor_display_width = ui::display_width_up_to(query, app.preview.search_cursor) as u16;
-    let cursor_x = area.x + 1 + "purvadarshana /: ".len() as u16 + cursor_display_width;
+    let cursor_offset = ("purvadarshana /: ".len() as u16)
+        .saturating_add(cursor_display_width)
+        .min(area.width.saturating_sub(2).saturating_sub(1));
+    let cursor_x = area.x + 1 + cursor_offset;
     let cursor_y = area.y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn overlay_width(root: Rect, fraction: f32, preferred_min: u16, margin: u16) -> u16 {
+    let max_width = root.width.saturating_sub(margin).max(1);
+    let min_width = preferred_min.min(max_width);
+    let desired = ((root.width as f32) * fraction) as u16;
+    desired.clamp(min_width, max_width)
 }
 
 fn centered_fixed_rect(width: u16, height: u16, r: Rect) -> Rect {
@@ -329,8 +338,7 @@ pub fn render_ksetra_input(f: &mut Frame, app: &AppState) {
     use ratatui::widgets::ListState;
 
     let root = f.area();
-    let width = ((root.width as f32) * 0.75) as u16;
-    let width = width.clamp(50, root.width.saturating_sub(4));
+    let width = overlay_width(root, 0.75, 50, 4);
 
     // Height: input (3) + completions (up to 7) + help (2) + borders
     let completions_count = app.ksetra_input.completions.len().min(5);
@@ -389,7 +397,12 @@ pub fn render_ksetra_input(f: &mut Frame, app: &AppState) {
     f.render_widget(input_widget, chunks[0]);
 
     // Set cursor position
-    let cursor_x = chunks[0].x + 1 + "path: ".len() as u16 + app.ksetra_input.cursor as u16;
+    let cursor_display_width =
+        ui::display_width_up_to(&app.ksetra_input.input, app.ksetra_input.cursor) as u16;
+    let cursor_offset = ("path: ".len() as u16)
+        .saturating_add(cursor_display_width)
+        .min(chunks[0].width.saturating_sub(2).saturating_sub(1));
+    let cursor_x = chunks[0].x + 1 + cursor_offset;
     let cursor_y = chunks[0].y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
 

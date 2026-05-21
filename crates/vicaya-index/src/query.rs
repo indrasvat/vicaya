@@ -6,6 +6,10 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
+const SHORT_QUERY_MAX_SCAN: usize = 50_000;
+const SHORT_QUERY_MIN_SCAN_AFTER_LIMIT: usize = 10_000;
+const INDEXED_QUERY_CANDIDATE_LIMIT: usize = 10_000;
+
 /// A search query.
 #[derive(Debug, Clone)]
 pub struct Query {
@@ -47,6 +51,13 @@ struct RankFeatures {
     path_depth: usize,
 }
 
+struct QueryContext<'b> {
+    boost_scope: Option<&'b Path>,
+    filter_scope: Option<&'b Path>,
+    cwd: Option<&'b Path>,
+    abbr_matcher: AbbreviationMatcher,
+}
+
 impl<'a> QueryEngine<'a> {
     /// Create a new query engine.
     pub fn new(
@@ -64,25 +75,43 @@ impl<'a> QueryEngine<'a> {
     /// Execute a search query.
     pub fn search(&self, query: &Query) -> Vec<SearchResult> {
         let normalized = query.term.to_lowercase();
-        let boost_scope = query.scope.as_deref();
-        let filter_scope = query.filter_scope.as_deref();
         let cwd = std::env::current_dir().ok();
-        let cwd = cwd.as_deref();
+        let context = QueryContext {
+            boost_scope: query.scope.as_deref(),
+            filter_scope: query.filter_scope.as_deref(),
+            cwd: cwd.as_deref(),
+            abbr_matcher: AbbreviationMatcher::new(),
+        };
 
         // For short queries, do a linear scan
         if normalized.len() < 3 {
-            return self.linear_search(&normalized, boost_scope, filter_scope, cwd, query.limit);
+            return self.linear_search(&normalized, query.limit, &context);
         }
 
         // Extract trigrams and query the index
         let trigrams = Trigram::extract(&normalized);
-        let candidates = self.trigram_index.query(&trigrams);
+        let candidates = if let Some(filter_scope) = context.filter_scope {
+            self.trigram_index.query_filtered_limited(
+                &trigrams,
+                INDEXED_QUERY_CANDIDATE_LIMIT,
+                |file_id| {
+                    let Some(meta) = self.file_table.get(file_id) else {
+                        return false;
+                    };
+                    let Some(path) = self.string_arena.get(meta.path_offset, meta.path_len) else {
+                        return false;
+                    };
+                    Self::scope_contains(Path::new(path), filter_scope, context.cwd)
+                },
+            )
+        } else {
+            self.trigram_index
+                .query_limited(&trigrams, INDEXED_QUERY_CANDIDATE_LIMIT)
+        };
 
         let mut ranked: Vec<(SearchResult, RankFeatures)> = Vec::with_capacity(query.limit);
         for file_id in candidates {
-            if let Some(result) =
-                self.score_candidate(file_id, &normalized, boost_scope, filter_scope, cwd)
-            {
+            if let Some(result) = self.score_candidate(file_id, &normalized, &context) {
                 self.push_ranked_candidate(&mut ranked, result, query.limit);
             }
         }
@@ -96,19 +125,15 @@ impl<'a> QueryEngine<'a> {
     /// subtree is cheaper than probing global posting lists and filtering afterward.
     pub fn search_file_ids(&self, query: &Query, file_ids: &[FileId]) -> Vec<SearchResult> {
         let normalized = query.term.to_lowercase();
-        let boost_scope = query.scope.as_deref();
-        let filter_scope = query.filter_scope.as_deref();
         let cwd = std::env::current_dir().ok();
-        let cwd = cwd.as_deref();
+        let context = QueryContext {
+            boost_scope: query.scope.as_deref(),
+            filter_scope: query.filter_scope.as_deref(),
+            cwd: cwd.as_deref(),
+            abbr_matcher: AbbreviationMatcher::new(),
+        };
 
-        self.search_file_ids_normalized(
-            &normalized,
-            boost_scope,
-            filter_scope,
-            cwd,
-            query.limit,
-            file_ids,
-        )
+        self.search_file_ids_normalized(&normalized, query.limit, file_ids, &context)
     }
 
     /// Score a candidate file.
@@ -116,9 +141,7 @@ impl<'a> QueryEngine<'a> {
         &self,
         file_id: FileId,
         query: &str,
-        boost_scope: Option<&Path>,
-        filter_scope: Option<&Path>,
-        cwd: Option<&Path>,
+        context: &QueryContext<'_>,
     ) -> Option<(SearchResult, RankFeatures)> {
         let meta = self.file_table.get(file_id)?;
 
@@ -126,8 +149,8 @@ impl<'a> QueryEngine<'a> {
         let name = self.string_arena.get(meta.name_offset, meta.name_len)?;
         let path_buf = Path::new(path);
 
-        if let Some(filter_scope) = filter_scope {
-            if !Self::scope_contains(path_buf, filter_scope, cwd) {
+        if let Some(filter_scope) = context.filter_scope {
+            if !Self::scope_contains(path_buf, filter_scope, context.cwd) {
                 return None;
             }
         }
@@ -143,11 +166,11 @@ impl<'a> QueryEngine<'a> {
                 None
             };
 
-        let abbr_score = if substring_score == Some(1.0) || is_literal_filename_query(query) {
+        let abbr_score = if substring_score.is_some() || is_literal_filename_query(query) {
             None
         } else {
-            let abbr_matcher = AbbreviationMatcher::new();
-            abbr_matcher
+            context
+                .abbr_matcher
                 .match_path(query, path)
                 .map(|abbr_match| abbr_match.score)
         };
@@ -163,7 +186,7 @@ impl<'a> QueryEngine<'a> {
         let path_depth = Self::path_depth(path);
         let features = RankFeatures {
             context_score: Self::context_score(path_lower.as_ref())
-                + Self::scope_boost(path_buf, boost_scope, cwd),
+                + Self::scope_boost(path_buf, context.boost_scope, context.cwd),
             path_depth,
         };
 
@@ -212,10 +235,8 @@ impl<'a> QueryEngine<'a> {
     fn linear_search(
         &self,
         query: &str,
-        boost_scope: Option<&Path>,
-        filter_scope: Option<&Path>,
-        cwd: Option<&Path>,
         limit: usize,
+        context: &QueryContext<'_>,
     ) -> Vec<SearchResult> {
         if limit == 0 {
             return Vec::new();
@@ -228,13 +249,19 @@ impl<'a> QueryEngine<'a> {
 
         for (scanned, (file_id, _meta)) in self.file_table.iter().enumerate() {
             // Early termination for non-matching queries
-            if filter_scope.is_none() && ranked.is_empty() && scanned >= MAX_EMPTY_SCAN {
+            if context.filter_scope.is_none() && ranked.is_empty() && scanned >= MAX_EMPTY_SCAN {
+                break;
+            }
+            // One- and two-character queries are inherently broad over large home
+            // indexes. Keep them interactive by sampling enough candidates to rank
+            // useful results without letting a single keystroke monopolize daemon IPC.
+            if scanned >= SHORT_QUERY_MAX_SCAN
+                || (ranked.len() >= limit && scanned >= SHORT_QUERY_MIN_SCAN_AFTER_LIMIT)
+            {
                 break;
             }
 
-            if let Some(result) =
-                self.score_candidate(file_id, query, boost_scope, filter_scope, cwd)
-            {
+            if let Some(result) = self.score_candidate(file_id, query, context) {
                 self.push_ranked_candidate(&mut ranked, result, limit);
             }
         }
@@ -246,11 +273,9 @@ impl<'a> QueryEngine<'a> {
     fn search_file_ids_normalized(
         &self,
         query: &str,
-        boost_scope: Option<&Path>,
-        filter_scope: Option<&Path>,
-        cwd: Option<&Path>,
         limit: usize,
         file_ids: &[FileId],
+        context: &QueryContext<'_>,
     ) -> Vec<SearchResult> {
         if limit == 0 {
             return Vec::new();
@@ -258,9 +283,7 @@ impl<'a> QueryEngine<'a> {
 
         let mut ranked: Vec<(SearchResult, RankFeatures)> = Vec::with_capacity(limit);
         for &file_id in file_ids {
-            if let Some(result) =
-                self.score_candidate(file_id, query, boost_scope, filter_scope, cwd)
-            {
+            if let Some(result) = self.score_candidate(file_id, query, context) {
                 self.push_ranked_candidate(&mut ranked, result, limit);
             }
         }
@@ -869,6 +892,97 @@ mod tests {
         let results = engine.search(&query);
         let names: Vec<_> = results.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["search.rs", "server.rs"]);
+    }
+
+    #[test]
+    fn test_common_indexed_queries_are_candidate_capped() {
+        let mut file_table = FileTable::new();
+        let mut arena = StringArena::new();
+        let mut index = TrigramIndex::new();
+
+        for i in 0..15_000 {
+            let path = format!("/home/user/site-packages/pkg_{i}/RECORD");
+            let name = "RECORD";
+            let (path_off, path_len) = arena.add(&path);
+            let (name_off, name_len) = arena.add(name);
+            let meta = FileMeta {
+                path_offset: path_off,
+                path_len,
+                name_offset: name_off,
+                name_len,
+                size: 1024,
+                mtime: i,
+                dev: 0,
+                ino: i as u64,
+            };
+
+            let file_id = file_table.insert(meta);
+            index.add(file_id, name);
+        }
+
+        let engine = QueryEngine::new(&file_table, &arena, &index);
+        let results = engine.search(&Query {
+            term: "record".to_string(),
+            limit: 10,
+            scope: Some(PathBuf::from("/home/user")),
+            filter_scope: None,
+        });
+
+        assert_eq!(results.len(), 10);
+        assert!(results.iter().all(|result| result.name == "RECORD"));
+    }
+
+    #[test]
+    fn test_scoped_indexed_search_filters_before_effective_limit() {
+        let mut file_table = FileTable::new();
+        let mut arena = StringArena::new();
+        let mut index = TrigramIndex::new();
+
+        for i in 0..(INDEXED_QUERY_CANDIDATE_LIMIT + 10) {
+            let path = format!("/outside/site-packages/pkg_{i}/RECORD");
+            let name = "RECORD";
+            let (path_off, path_len) = arena.add(&path);
+            let (name_off, name_len) = arena.add(name);
+            let meta = FileMeta {
+                path_offset: path_off,
+                path_len,
+                name_offset: name_off,
+                name_len,
+                size: 1024,
+                mtime: i as i64,
+                dev: 0,
+                ino: i as u64,
+            };
+
+            let file_id = file_table.insert(meta);
+            index.add(file_id, name);
+        }
+
+        let inside_path = "/inside/notes/recording.md";
+        let (path_off, path_len) = arena.add(inside_path);
+        let (name_off, name_len) = arena.add("recording.md");
+        let file_id = file_table.insert(FileMeta {
+            path_offset: path_off,
+            path_len,
+            name_offset: name_off,
+            name_len,
+            size: 512,
+            mtime: 99_999,
+            dev: 0,
+            ino: 99_999,
+        });
+        index.add(file_id, "recording.md");
+
+        let engine = QueryEngine::new(&file_table, &arena, &index);
+        let results = engine.search(&Query {
+            term: "record".to_string(),
+            limit: 10,
+            scope: Some(PathBuf::from("/inside")),
+            filter_scope: Some(PathBuf::from("/inside")),
+        });
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, inside_path);
     }
 
     #[test]

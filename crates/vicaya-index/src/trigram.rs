@@ -98,6 +98,30 @@ impl TrigramIndex {
 
     /// Query the index for files containing all given trigrams.
     pub fn query(&self, trigrams: &[Trigram]) -> Vec<FileId> {
+        self.query_limited(trigrams, usize::MAX)
+    }
+
+    /// Query the index for files containing all given trigrams, stopping after
+    /// `max_results` candidates.
+    pub fn query_limited(&self, trigrams: &[Trigram], max_results: usize) -> Vec<FileId> {
+        self.query_filtered_limited(trigrams, max_results, |_| true)
+    }
+
+    /// Query the index for files containing all given trigrams, applying `accept`
+    /// before counting a candidate against `max_results`.
+    pub fn query_filtered_limited<F>(
+        &self,
+        trigrams: &[Trigram],
+        max_results: usize,
+        mut accept: F,
+    ) -> Vec<FileId>
+    where
+        F: FnMut(FileId) -> bool,
+    {
+        if max_results == 0 {
+            return Vec::new();
+        }
+
         if trigrams.is_empty() {
             return Vec::new();
         }
@@ -124,6 +148,8 @@ impl TrigramIndex {
         smallest
             .iter()
             .filter(|&&file_id| rest.iter().all(|list| list.binary_search(&file_id).is_ok()))
+            .filter(|&&file_id| accept(file_id))
+            .take(max_results)
             .copied()
             .collect()
     }
@@ -190,5 +216,17 @@ mod tests {
 
         let results = index.query(&Trigram::extract("hel"));
         assert_eq!(results, vec![FileId(1), FileId(2), FileId(3)]);
+    }
+
+    #[test]
+    fn query_limited_caps_common_posting_lists() {
+        let mut index = TrigramIndex::new();
+
+        for id in 0..10 {
+            index.add(FileId(id), "record");
+        }
+
+        let results = index.query_limited(&Trigram::extract("record"), 3);
+        assert_eq!(results, vec![FileId(0), FileId(1), FileId(2)]);
     }
 }

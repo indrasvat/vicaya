@@ -993,13 +993,12 @@ fn trigger_search(
     search_id: &mut u64,
     active_search_id: &mut u64,
     last_search_sent_at: &mut std::time::Instant,
-) {
+) -> bool {
     let parsed = crate::state::parse_query(&app.search.query);
 
-    app.search.is_searching = true;
     *search_id = (*search_id).wrapping_add(1);
     *active_search_id = *search_id;
-    let _ = cmd_tx.send(WorkerCommand::Search {
+    let command = WorkerCommand::Search {
         id: *active_search_id,
         query: parsed.term,
         limit: 100,
@@ -1007,8 +1006,17 @@ fn trigger_search(
         boost_scope: app.ksetra.current().cloned(),
         filter_scope: app.ksetra.current().cloned(),
         niyamas: parsed.niyamas,
-    });
+    };
+
+    if cmd_tx.send(command).is_err() {
+        app.search.is_searching = false;
+        app.error = Some("Search worker is unavailable".to_string());
+        return false;
+    }
+
+    app.search.is_searching = true;
     *last_search_sent_at = std::time::Instant::now();
+    true
 }
 
 /// Copy path to clipboard
@@ -1287,6 +1295,24 @@ mod tests {
     }
 
     #[test]
+    fn narrow_terminal_control_overlays_do_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = AppState::with_startup_scope(Some(dir.path().to_path_buf()));
+
+        handle_key_event(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert_eq!(app.mode, AppMode::KsetraInput);
+        let ksetra = buffer_text(&mut app, 48, 24);
+        assert!(ksetra.contains("ksetra"));
+
+        handle_key_event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        app.search.focus = FocusTarget::Preview;
+        handle_key_event(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        assert_eq!(app.mode, AppMode::PreviewSearch);
+        let preview = buffer_text(&mut app, 42, 20);
+        assert!(preview.contains("preview"));
+    }
+
+    #[test]
     fn drishti_switcher_selects_enabled_views_and_reports_disabled_views() {
         let mut app = AppState::new();
 
@@ -1425,13 +1451,13 @@ mod tests {
         let mut active_search_id = 0;
         let mut last = std::time::Instant::now();
 
-        trigger_search(
+        assert!(trigger_search(
             &tx,
             &mut app,
             &mut search_id,
             &mut active_search_id,
             &mut last,
-        );
+        ));
 
         match rx.try_recv().unwrap() {
             WorkerCommand::Search {
@@ -1455,6 +1481,28 @@ mod tests {
         assert_eq!(search_id, 1);
         assert_eq!(active_search_id, 1);
         assert!(app.search.is_searching);
+    }
+
+    #[test]
+    fn trigger_search_does_not_leave_tui_stuck_when_worker_is_gone() {
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        let mut app = AppState::new();
+        app.search.set_query("record".to_string());
+        let mut search_id = 0;
+        let mut active_search_id = 0;
+        let mut last = std::time::Instant::now();
+
+        assert!(!trigger_search(
+            &tx,
+            &mut app,
+            &mut search_id,
+            &mut active_search_id,
+            &mut last,
+        ));
+
+        assert!(!app.search.is_searching);
+        assert_eq!(app.error.as_deref(), Some("Search worker is unavailable"));
     }
 
     #[test]
@@ -1498,6 +1546,7 @@ mod tests {
         app.preview.start_search();
         app.preview.insert_search_char('d');
         assert!(buffer_text(&mut app, 100, 28).contains("preview"));
+        assert!(buffer_text(&mut app, 42, 20).contains("preview"));
 
         app.mode = AppMode::KsetraInput;
         app.ksetra_input.input = dir.path().to_string_lossy().to_string();
@@ -1505,6 +1554,7 @@ mod tests {
         app.ksetra_input
             .set_completions(vec![dir.path().to_string_lossy().to_string()]);
         assert!(buffer_text(&mut app, 100, 28).contains("ksetra"));
+        assert!(buffer_text(&mut app, 48, 24).contains("ksetra"));
 
         app.mode = AppMode::Confirm(crate::state::Action::Quit);
         assert!(buffer_text(&mut app, 100, 28).contains("sure"));
