@@ -6,6 +6,21 @@
 * **release:** support workspace version inheritance ([8bb0ea6](https://github.com/indrasvat/vicaya/commit/8bb0ea632c5a2e9fc01504839fb997895f29a9d7))
 * **release:** use release pr workflow ([b868bdb](https://github.com/indrasvat/vicaya/commit/b868bdbbb1567def7ec22fd78dd9e934ea14f164))
 
+## [1.2.3](https://github.com/indrasvat/vicaya/compare/v1.2.2...v1.2.3) (2026-05-21)
+
+
+### Bug Fixes
+
+* **ci:** identify codecov uploads explicitly ([aefd718](https://github.com/indrasvat/vicaya/commit/aefd71877591ad8ec246083655de96082f3284fa))
+* **ci:** measure binary crate coverage ([0825270](https://github.com/indrasvat/vicaya/commit/0825270d2ff984af5dd9d9115e45eee2d445ea24))
+* **ci:** use oidc for codecov uploads ([#41](https://github.com/indrasvat/vicaya/issues/41)) ([fc28eab](https://github.com/indrasvat/vicaya/commit/fc28eab9526acafd2b82c090aee6d9d2ed82d119))
+* **release:** stabilize draft asset builds ([4b1888a](https://github.com/indrasvat/vicaya/commit/4b1888ac525cdc76034954b4e43e952873cc70f0))
+
+
+### Performance Improvements
+
+* **tui:** restore fast scoped search ([e1de879](https://github.com/indrasvat/vicaya/commit/e1de879181790d707530d9ef543a3bdbdab64384))
+
 ## [1.2.1](https://github.com/indrasvat/vicaya/compare/v1.2.0...v1.2.1) (2026-05-19)
 
 
