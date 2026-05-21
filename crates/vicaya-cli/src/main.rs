@@ -182,12 +182,7 @@ fn search(query: &str, limit: usize, format: &str, scope: Option<&Path>) -> Resu
     let response = IpcClient::connect()?.request(&request)?;
 
     match response {
-        Response::SearchResults { mut results } => {
-            if results.is_empty() {
-                if let Some(retry) = wait_for_reconcile_and_retry(&request, format)? {
-                    results = retry;
-                }
-            }
+        Response::SearchResults { results } => {
             match format {
                 "json" => {
                     println!("{}", serde_json::to_string_pretty(&results).unwrap());
@@ -225,45 +220,6 @@ fn search(query: &str, limit: usize, format: &str, scope: Option<&Path>) -> Resu
             Ok(())
         }
     }
-}
-
-fn wait_for_reconcile_and_retry(
-    search_request: &Request,
-    format: &str,
-) -> Result<Option<Vec<vicaya_core::ipc::SearchResult>>> {
-    use std::time::{Duration, Instant};
-
-    let reconciling = match IpcClient::connect()?.request(&Request::Status)? {
-        Response::Status { reconciling, .. } => reconciling,
-        _ => return Ok(None),
-    };
-
-    if !reconciling {
-        return Ok(None);
-    }
-
-    if format != "json" {
-        eprintln!("Index is reconciling; waiting for results...");
-    }
-
-    let deadline = Instant::now() + Duration::from_secs(120);
-
-    while Instant::now() < deadline {
-        let reconciling = match IpcClient::connect()?.request(&Request::Status)? {
-            Response::Status { reconciling, .. } => reconciling,
-            _ => false,
-        };
-        if !reconciling {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-
-    let Response::SearchResults { results } = IpcClient::connect()?.request(search_request)? else {
-        return Ok(None);
-    };
-
-    Ok(Some(results))
 }
 
 fn rebuild(dry_run: bool) -> Result<()> {

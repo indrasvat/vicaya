@@ -194,22 +194,30 @@ fn it_replays_journal_when_starting_from_existing_index() {
     let socket = vicaya_dir.path().join("daemon.sock");
     wait_for_socket(&socket, Duration::from_secs(10));
 
-    let response = ipc_request(
-        &socket,
-        &Request::Search {
-            query: "after.txt".to_string(),
-            limit: 20,
-            scope: None,
-            filter_scope: None,
-            recent_if_empty: false,
-        },
-    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let response = ipc_request(
+            &socket,
+            &Request::Search {
+                query: "after.txt".to_string(),
+                limit: 20,
+                scope: None,
+                filter_scope: None,
+                recent_if_empty: false,
+            },
+        );
 
-    match response {
-        Response::SearchResults { results } => {
-            assert!(results.iter().any(|r| r.path.ends_with("after.txt")));
+        if let Response::SearchResults { results } = response {
+            if results.iter().any(|r| r.path.ends_with("after.txt")) {
+                break;
+            }
         }
-        other => panic!("unexpected response: {:?}", other),
+
+        if Instant::now() >= deadline {
+            panic!("Timed out waiting for startup reconcile to apply journal update");
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     let _ = ipc_request(&socket, &Request::Shutdown);

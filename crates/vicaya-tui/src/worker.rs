@@ -3,7 +3,7 @@
 use crate::client::{DaemonStatus, IpcClient};
 use crate::state::{Niyama, NiyamaType, StyledLine, StyledSegment, TextKind, TextStyle, ViewKind};
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vicaya_index::SearchResult;
 
 use syntect::{
@@ -11,6 +11,18 @@ use syntect::{
     highlighting::{FontStyle, Theme, ThemeSet},
     parsing::SyntaxSet,
     util::LinesWithEndings,
+};
+
+const STATUS_FAILURES_BEFORE_OFFLINE: usize = 2;
+const STATUS_POLL_INTERVAL: Duration = if cfg!(test) {
+    Duration::from_millis(50)
+} else {
+    Duration::from_secs(2)
+};
+const STATUS_POLL_SLEEP_STEP: Duration = if cfg!(test) {
+    Duration::from_millis(10)
+} else {
+    Duration::from_millis(50)
 };
 
 pub enum WorkerCommand {
@@ -56,8 +68,9 @@ pub fn start_worker(
 }
 
 fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
-    let mut client = IpcClient::new();
-    let mut last_status_at = Instant::now() - Duration::from_secs(60);
+    let mut search_client = IpcClient::new();
+    let status_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let status_handle = start_status_worker(evt_tx.clone(), status_stop.clone());
 
     let syntaxes = SyntaxSet::load_defaults_newlines();
     let themes = ThemeSet::load_defaults();
@@ -77,7 +90,7 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
     let mut pending_search: Option<PendingSearch> = None;
     let mut pending_preview: Option<(u64, String)> = None;
 
-    loop {
+    'worker: loop {
         // Receive at least one command, but wake periodically for status.
         match cmd_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(cmd) => match cmd {
@@ -101,10 +114,10 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     })
                 }
                 WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
-                WorkerCommand::Quit => break,
+                WorkerCommand::Quit => break 'worker,
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break 'worker,
         }
 
         // Coalesce bursts: keep only the latest search/preview request.
@@ -130,15 +143,8 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     })
                 }
                 WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
-                WorkerCommand::Quit => return,
+                WorkerCommand::Quit => break 'worker,
             }
-        }
-
-        // Periodic status updates (best-effort).
-        if last_status_at.elapsed() >= Duration::from_secs(2) {
-            let status = client.status().ok();
-            let _ = evt_tx.send(WorkerEvent::Status { status });
-            last_status_at = Instant::now();
         }
 
         if let Some(PendingSearch {
@@ -162,19 +168,24 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             // When query is empty, request recent files from daemon
             let recent_if_empty = trimmed.is_empty();
 
-            let mut results =
-                match client.search(&trimmed, limit, boost_scope, filter_scope, recent_if_empty) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        client.reconnect();
-                        let _ = evt_tx.send(WorkerEvent::SearchResults {
-                            id,
-                            results: Vec::new(),
-                            error: Some(format!("Search error: {}", e)),
-                        });
-                        continue;
-                    }
-                };
+            let mut results = match search_client.search(
+                &trimmed,
+                limit,
+                boost_scope,
+                filter_scope,
+                recent_if_empty,
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    search_client.reconnect();
+                    let _ = evt_tx.send(WorkerEvent::SearchResults {
+                        id,
+                        results: Vec::new(),
+                        error: Some(format!("Search error: {}", e)),
+                    });
+                    continue;
+                }
+            };
 
             // Scope + Niyama filtering (best-effort).
             results.retain(|r| matches_filters(r, view, filter_scope, &niyamas));
@@ -200,6 +211,54 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             }
         }
     }
+
+    status_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let _ = status_handle.join();
+}
+
+fn start_status_worker(
+    evt_tx: Sender<WorkerEvent>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut client = IpcClient::best_effort();
+        let mut last_status: Option<DaemonStatus> = None;
+        let mut failures = 0usize;
+
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            match client.status() {
+                Ok(status) => {
+                    failures = 0;
+                    last_status = Some(status.clone());
+                    let _ = evt_tx.send(WorkerEvent::Status {
+                        status: Some(status),
+                    });
+                }
+                Err(_) => {
+                    failures = failures.saturating_add(1);
+                    client.reconnect();
+
+                    if failures >= STATUS_FAILURES_BEFORE_OFFLINE {
+                        last_status = None;
+                        let _ = evt_tx.send(WorkerEvent::Status { status: None });
+                    } else if let Some(status) = last_status.clone() {
+                        let _ = evt_tx.send(WorkerEvent::Status {
+                            status: Some(status),
+                        });
+                    }
+                }
+            }
+
+            let mut slept = Duration::from_millis(0);
+            while slept < STATUS_POLL_INTERVAL {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(STATUS_POLL_SLEEP_STEP);
+                slept += STATUS_POLL_SLEEP_STEP;
+            }
+        }
+    })
 }
 
 fn matches_filters(
@@ -547,7 +606,8 @@ mod tests {
     use std::io::{BufReader, Write};
     use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
     use tempfile::tempdir;
     use vicaya_core::ipc::{BuildInfo, Request, Response};
 
@@ -858,7 +918,7 @@ mod tests {
                         requests.push(request);
                         let mut json = response.to_json().unwrap();
                         json.push('\n');
-                        stream.write_all(json.as_bytes()).unwrap();
+                        let _ = stream.write_all(json.as_bytes());
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -867,6 +927,137 @@ mod tests {
                 }
             }
             requests
+        })
+    }
+
+    fn start_status_blackhole_daemon(
+        vicaya_dir: &std::path::Path,
+        stop: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<Vec<Request>> {
+        let socket = vicaya_dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let requests = Arc::clone(&requests);
+                        let stop = Arc::clone(&stop);
+                        std::thread::spawn(move || {
+                            let mut reader = BufReader::new(stream.try_clone().unwrap());
+                            let Ok(Some(line)) = vicaya_core::ipc::read_message(&mut reader) else {
+                                return;
+                            };
+                            let Ok(request) = Request::from_json(&line) else {
+                                return;
+                            };
+                            requests.lock().unwrap().push(request.clone());
+
+                            match request {
+                                Request::Status => {
+                                    while !stop.load(Ordering::Relaxed) {
+                                        std::thread::sleep(Duration::from_millis(25));
+                                    }
+                                }
+                                Request::Search { .. } => {
+                                    let response = Response::SearchResults {
+                                        results: vec![vicaya_core::ipc::SearchResult {
+                                            path: "/tmp/repo/src/main.rs".to_string(),
+                                            name: "main.rs".to_string(),
+                                            score: 1.0,
+                                            size: 12,
+                                            mtime: 1_700_000_000,
+                                        }],
+                                    };
+                                    let mut json = response.to_json().unwrap();
+                                    json.push('\n');
+                                    stream.write_all(json.as_bytes()).unwrap();
+                                }
+                                _ => {}
+                            }
+                        });
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            requests.lock().unwrap().clone()
+        })
+    }
+
+    fn start_one_missed_status_daemon(
+        vicaya_dir: &std::path::Path,
+        stop: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<Vec<Request>> {
+        let socket = vicaya_dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let status_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let requests = Arc::clone(&requests);
+                        let status_count = Arc::clone(&status_count);
+                        std::thread::spawn(move || {
+                            let mut reader = BufReader::new(stream.try_clone().unwrap());
+                            while let Ok(Some(line)) = vicaya_core::ipc::read_message(&mut reader) {
+                                let Ok(request) = Request::from_json(&line) else {
+                                    return;
+                                };
+                                requests.lock().unwrap().push(request.clone());
+
+                                let response = match request {
+                                    Request::Status => {
+                                        let count =
+                                            status_count.fetch_add(1, Ordering::Relaxed) + 1;
+                                        if count == 2 {
+                                            return;
+                                        }
+
+                                        Response::Status {
+                                            pid: 77,
+                                            build: BuildInfo {
+                                                version: "1.2.0".to_string(),
+                                                git_sha: "abc1234".to_string(),
+                                                timestamp: "2026-05-19T00:00:00Z".to_string(),
+                                                target: "aarch64-apple-darwin".to_string(),
+                                            },
+                                            indexed_files: 3,
+                                            trigram_count: 9,
+                                            arena_size: 128,
+                                            index_allocated_bytes: 256,
+                                            state_allocated_bytes: 512,
+                                            last_updated: 1_700_000_000,
+                                            reconciling: false,
+                                        }
+                                    }
+                                    _ => Response::Ok,
+                                };
+
+                                let mut json = response.to_json().unwrap();
+                                json.push('\n');
+                                let _ = stream.write_all(json.as_bytes());
+                            }
+                        });
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            requests.lock().unwrap().clone()
         })
     }
 
@@ -981,5 +1172,100 @@ mod tests {
         assert!(!requests
             .iter()
             .any(|req| { matches!(req, Request::Search { query, .. } if query == "stale") }));
+    }
+
+    #[test]
+    fn worker_search_is_not_blocked_by_hung_status_connection() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let vicaya_dir = tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", vicaya_dir.path());
+        let stop = Arc::new(AtomicBool::new(false));
+        let fake_daemon = start_status_blackhole_daemon(vicaya_dir.path(), Arc::clone(&stop));
+
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let (evt_tx, evt_rx) = std::sync::mpsc::channel();
+        let worker = start_worker(cmd_rx, evt_tx);
+
+        std::thread::sleep(Duration::from_millis(250));
+        cmd_tx
+            .send(WorkerCommand::Search {
+                id: 1,
+                query: "main".to_string(),
+                limit: 10,
+                view: ViewKind::Patra,
+                boost_scope: Some(std::path::PathBuf::from("/tmp/repo")),
+                filter_scope: Some(std::path::PathBuf::from("/tmp/repo/src")),
+                niyamas: Vec::new(),
+            })
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_search = false;
+        while Instant::now() < deadline {
+            if let Ok(WorkerEvent::SearchResults { id, results, error }) =
+                evt_rx.recv_timeout(Duration::from_millis(100))
+            {
+                if id == 1 {
+                    assert!(error.is_none(), "unexpected search error: {error:?}");
+                    assert_eq!(results.len(), 1);
+                    assert_eq!(results[0].name, "main.rs");
+                    saw_search = true;
+                    break;
+                }
+            }
+        }
+
+        cmd_tx.send(WorkerCommand::Quit).unwrap();
+        worker.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        let requests = fake_daemon.join().unwrap();
+
+        assert!(saw_search, "search was blocked behind status polling");
+        assert!(requests.iter().any(|req| matches!(req, Request::Status)));
+        assert!(requests
+            .iter()
+            .any(|req| matches!(req, Request::Search { query, .. } if query == "main")));
+    }
+
+    #[test]
+    fn status_worker_keeps_last_status_after_one_missed_probe() {
+        let _lock = vicaya_core::paths::test_env_lock();
+        let vicaya_dir = tempdir().unwrap();
+        std::env::set_var("VICAYA_DIR", vicaya_dir.path());
+        let stop = Arc::new(AtomicBool::new(false));
+        let fake_daemon = start_one_missed_status_daemon(vicaya_dir.path(), Arc::clone(&stop));
+
+        let (evt_tx, evt_rx) = std::sync::mpsc::channel();
+        let status_worker = start_status_worker(evt_tx, Arc::clone(&stop));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut statuses = Vec::new();
+        while Instant::now() < deadline && statuses.len() < 3 {
+            if let Ok(WorkerEvent::Status { status }) =
+                evt_rx.recv_timeout(Duration::from_millis(100))
+            {
+                statuses.push(status.map(|status| status.indexed_files));
+            }
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        status_worker.join().unwrap();
+        let requests = fake_daemon.join().unwrap();
+
+        assert!(
+            statuses.len() >= 3,
+            "expected status events before and after missed probe, got {statuses:?}"
+        );
+        assert!(
+            statuses.iter().all(|status| *status == Some(3)),
+            "single missed probe should not report daemon offline: {statuses:?}"
+        );
+        assert!(
+            requests
+                .iter()
+                .filter(|req| matches!(req, Request::Status))
+                .count()
+                >= 3
+        );
     }
 }
