@@ -599,10 +599,16 @@ impl<'a> QueryEngine<'a> {
 }
 
 fn lower_if_needed(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.bytes().all(|b| !b.is_ascii_uppercase()) {
-        std::borrow::Cow::Borrowed(text)
-    } else {
+    if text.is_ascii() {
+        if text.bytes().any(|b| b.is_ascii_uppercase()) {
+            std::borrow::Cow::Owned(text.to_lowercase())
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        }
+    } else if text.chars().any(|c| c.is_uppercase()) {
         std::borrow::Cow::Owned(text.to_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(text)
     }
 }
 
@@ -676,6 +682,38 @@ mod tests {
         let results = engine.search(&query);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "test.txt");
+    }
+
+    #[test]
+    fn unicode_uppercase_filename_matches_lowercase_query() {
+        let mut file_table = FileTable::new();
+        let mut arena = StringArena::new();
+        let mut index = TrigramIndex::new();
+
+        let (path_off, path_len) = arena.add("/repo/Überblick.md");
+        let (name_off, name_len) = arena.add("Überblick.md");
+        let file_id = file_table.insert(FileMeta {
+            path_offset: path_off,
+            path_len,
+            name_offset: name_off,
+            name_len,
+            size: 1,
+            mtime: 0,
+            dev: 0,
+            ino: 0,
+        });
+        index.add(file_id, "Überblick.md");
+
+        let engine = QueryEngine::new(&file_table, &arena, &index);
+        let results = engine.search(&Query {
+            term: "über".to_string(),
+            limit: 10,
+            scope: None,
+            filter_scope: None,
+        });
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Überblick.md");
     }
 
     #[test]

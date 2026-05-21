@@ -975,6 +975,7 @@ pub fn full_rebuild_from_disk(
 
             rebuilt.snapshot.save(&index_file)?;
             truncate_journal(&journal_file)?;
+            rebuilt.last_updated = now_epoch_seconds();
             rebuilt.reconciling = false;
 
             let mut state = state.write().unwrap();
@@ -1516,6 +1517,25 @@ mod tests {
 
         truncate_journal(&journal).unwrap();
         assert_eq!(std::fs::metadata(&journal).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn full_rebuild_refreshes_last_updated_after_swap() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[package]\n").unwrap();
+
+        let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
+        state.write().unwrap().last_updated = 0;
+
+        let files_indexed =
+            full_rebuild_from_disk(&state, &Arc::new(Mutex::new(())), &Arc::new(Mutex::new(())))
+                .unwrap();
+
+        assert!(files_indexed >= 1);
+        let state = state.read().unwrap();
+        assert!(state.last_updated > 0);
+        assert!(!state.reconciling);
     }
 
     #[test]

@@ -141,8 +141,9 @@ impl AbbreviationMatcher {
             .and_then(|s| s.to_str())
             .unwrap_or(&filename_lower);
 
+        let query_len = query.chars().count();
         if stem.starts_with(query) {
-            let matched_indices: Vec<usize> = (0..query.len()).collect();
+            let matched_indices: Vec<usize> = (0..query_len).collect();
             // Give perfect score for exact match, slightly lower for prefix
             let score = if stem == query { 1.0 } else { 0.99 };
             return Some(AbbreviationMatch {
@@ -156,7 +157,7 @@ impl AbbreviationMatcher {
         for component in Path::new(&path_lower).components() {
             if let Some(comp_str) = component.as_os_str().to_str() {
                 if comp_str.starts_with(query) {
-                    let matched_indices: Vec<usize> = (0..query.len()).collect();
+                    let matched_indices: Vec<usize> = (0..query_len).collect();
                     return Some(AbbreviationMatch {
                         score: 0.98, // Slightly lower than filename prefix
                         strategy: MatchStrategy::ExactPrefix,
@@ -209,7 +210,8 @@ impl AbbreviationMatcher {
         if query_idx == query_chars.len() {
             // Calculate score based on match quality
             let base_score = 0.95;
-            let consecutive_bonus = self.calculate_consecutive_bonus(&matched_indices, query.len());
+            let consecutive_bonus =
+                self.calculate_consecutive_bonus(&matched_indices, query_chars.len());
             let coverage_ratio = matched_indices.len() as f32 / first_letters.len() as f32;
             let coverage_bonus = coverage_ratio * 0.05;
 
@@ -279,7 +281,7 @@ impl AbbreviationMatcher {
         if query_idx == query_chars.len() {
             let base_score = 0.90;
             let consecutive_bonus =
-                self.calculate_consecutive_bonus(&matched_indices, query_lower.len());
+                self.calculate_consecutive_bonus(&matched_indices, query_chars.len());
 
             // Bonus for matching actual uppercase in query to uppercase in path
             let case_match_bonus =
@@ -340,7 +342,8 @@ impl AbbreviationMatcher {
             let base_score = 0.70;
 
             // Bonus for consecutive matches
-            let consecutive_bonus = self.calculate_consecutive_bonus(&matched_indices, query.len());
+            let consecutive_bonus =
+                self.calculate_consecutive_bonus(&matched_indices, query_chars.len());
 
             // Bonus for matches closer to end (filename)
             let avg_pos =
@@ -350,7 +353,7 @@ impl AbbreviationMatcher {
 
             // Penalty for large gaps
             let total_span = matched_indices.last().unwrap() - matched_indices.first().unwrap() + 1;
-            let gap_ratio = (total_span - query.len()) as f32 / path_chars.len() as f32;
+            let gap_ratio = (total_span - query_chars.len()) as f32 / path_chars.len() as f32;
             let gap_penalty = gap_ratio * 0.10;
 
             let score =
