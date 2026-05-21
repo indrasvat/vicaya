@@ -79,6 +79,7 @@ fn cli_search_scope_restricts_results_to_requested_directory() {
     let config = Config {
         index_roots: vec![corpus_root.path().to_path_buf()],
         exclusions: Vec::new(),
+        respect_ignore_files: true,
         index_path: vicaya_dir.path().join("index"),
         max_memory_mb: 64,
         performance: PerformanceConfig {

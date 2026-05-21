@@ -63,6 +63,7 @@ fn write_config(vicaya_dir: &Path, root: &Path) {
     let config = Config {
         index_roots: vec![root.to_path_buf()],
         exclusions: vec!["target".to_string(), "*.profraw".to_string()],
+        respect_ignore_files: true,
         index_path: vicaya_dir.join("index"),
         max_memory_mb: 64,
         performance: PerformanceConfig {
@@ -78,6 +79,7 @@ fn run_vicaya(vicaya_bin: &Path, vicaya_dir: &Path, daemon_bin: &Path, args: &[&
     let output = Command::new(vicaya_bin)
         .env("VICAYA_DIR", vicaya_dir)
         .env("VICAYA_DAEMON_BIN", daemon_bin)
+        .env("VICAYA_NO_UPDATE_CHECK", "1")
         .args(args)
         .output()
         .unwrap();

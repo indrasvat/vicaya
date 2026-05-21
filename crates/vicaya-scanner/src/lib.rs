@@ -1,10 +1,10 @@
 //! vicaya-scanner: Parallel filesystem scanner.
 
+use ignore::gitignore::GitignoreBuilder;
 use std::path::Path;
 use tracing::{debug, info, warn};
 use vicaya_core::{Config, Result};
 use vicaya_index::{FileMeta, FileTable, StringArena, TrigramIndex};
-use walkdir::WalkDir;
 
 /// Scanned file information.
 pub struct ScannedFile {
@@ -57,11 +57,21 @@ impl Scanner {
     ) -> Result<()> {
         let mut scanned_entries = 0usize;
         let mut entry_errors = 0usize;
-        for entry in WalkDir::new(root)
+        let exclusions = self.config.exclusions.clone();
+        let mut walker = ignore::WalkBuilder::new(root);
+        walker
             .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| self.should_index(e.path()))
-        {
+            .hidden(false)
+            .ignore(self.config.respect_ignore_files)
+            .git_ignore(self.config.respect_ignore_files)
+            .git_global(false)
+            .git_exclude(self.config.respect_ignore_files)
+            .require_git(false)
+            .filter_entry(move |entry| {
+                vicaya_core::filter::should_index_path(entry.path(), &exclusions)
+            });
+
+        for entry in walker.build() {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => {
@@ -70,7 +80,10 @@ impl Scanner {
                 }
             };
 
-            if !(entry.file_type().is_file() || entry.file_type().is_dir()) {
+            let Some(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !(file_type.is_file() || file_type.is_dir()) {
                 continue;
             }
 
@@ -100,8 +113,9 @@ impl Scanner {
     }
 
     /// Check if a path should be indexed.
+    #[cfg(test)]
     fn should_index(&self, path: &Path) -> bool {
-        vicaya_core::filter::should_index_path(path, &self.config.exclusions)
+        should_index_path(&self.config, path, path.is_dir())
     }
 
     /// Scan a single file and extract metadata.
@@ -169,6 +183,99 @@ impl Scanner {
     }
 }
 
+/// Check if a path should be indexed under the same high-level rules used by
+/// the scanner. This is also used by the daemon for incremental watcher events.
+pub fn should_index_path(config: &Config, path: &Path, is_dir: bool) -> bool {
+    vicaya_core::filter::should_index_path(path, &config.exclusions)
+        && !is_ignored_by_repo_rules(config, path, is_dir)
+}
+
+fn is_ignored_by_repo_rules(config: &Config, path: &Path, is_dir: bool) -> bool {
+    if !config.respect_ignore_files {
+        return false;
+    }
+
+    let Some(root) = matching_index_root(config, path) else {
+        return false;
+    };
+    let Some(stop_at) = path.parent() else {
+        return false;
+    };
+
+    let mut ignored = false;
+    let mut dirs = Vec::new();
+    let mut current = stop_at;
+    loop {
+        if current.starts_with(root) {
+            dirs.push(current.to_path_buf());
+        }
+        if current == root {
+            break;
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent;
+    }
+    dirs.reverse();
+
+    for dir in dirs {
+        ignored = apply_ignore_file(&dir.join(".gitignore"), &dir, path, is_dir, ignored);
+        ignored = apply_ignore_file(&dir.join(".ignore"), &dir, path, is_dir, ignored);
+        ignored = apply_ignore_file(&dir.join(".git/info/exclude"), &dir, path, is_dir, ignored);
+    }
+
+    ignored
+}
+
+fn matching_index_root<'a>(config: &'a Config, path: &Path) -> Option<&'a Path> {
+    config
+        .index_roots
+        .iter()
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .map(|root| root.as_path())
+}
+
+fn apply_ignore_file(
+    ignore_file: &Path,
+    ignore_root: &Path,
+    path: &Path,
+    is_dir: bool,
+    current: bool,
+) -> bool {
+    if !ignore_file.is_file() {
+        return current;
+    }
+
+    let mut builder = GitignoreBuilder::new(ignore_root);
+    if let Some(err) = builder.add(ignore_file) {
+        warn!(
+            "Failed to read ignore file {}: {}",
+            ignore_file.display(),
+            err
+        );
+        return current;
+    }
+    let matcher = match builder.build() {
+        Ok(matcher) => matcher,
+        Err(err) => {
+            warn!(
+                "Failed to parse ignore file {}: {}",
+                ignore_file.display(),
+                err
+            );
+            return current;
+        }
+    };
+
+    match matcher.matched_path_or_any_parents(path, is_dir) {
+        ignore::Match::Ignore(_) => true,
+        ignore::Match::Whitelist(_) => false,
+        ignore::Match::None => current,
+    }
+}
+
 /// Snapshot of the index at a point in time.
 pub struct IndexSnapshot {
     pub file_table: FileTable,
@@ -225,6 +332,86 @@ mod tests {
             ..Default::default()
         };
         Scanner::new(config)
+    }
+
+    fn test_config(root: &Path, respect_ignore_files: bool) -> Config {
+        Config {
+            index_roots: vec![root.to_path_buf()],
+            exclusions: Vec::new(),
+            respect_ignore_files,
+            index_path: root.join(".vicaya-index"),
+            max_memory_mb: 128,
+            performance: vicaya_core::config::PerformanceConfig {
+                scanner_threads: 2,
+                reconcile_hour: 3,
+            },
+        }
+    }
+
+    fn indexed_names(snapshot: &IndexSnapshot) -> Vec<String> {
+        snapshot
+            .file_table
+            .iter()
+            .filter_map(|(_, meta)| {
+                snapshot
+                    .string_arena
+                    .get(meta.name_offset, meta.name_len)
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scan_respects_gitignore_files_by_default() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(".gitignore"),
+            "ignored/\n*.log\n!important.log\n",
+        )
+        .unwrap();
+        std::fs::create_dir(root.path().join("ignored")).unwrap();
+        std::fs::write(root.path().join("ignored/skip.rs"), "").unwrap();
+        std::fs::write(root.path().join("app.log"), "").unwrap();
+        std::fs::write(root.path().join("important.log"), "").unwrap();
+        std::fs::write(root.path().join("keep.rs"), "").unwrap();
+
+        let snapshot = Scanner::new(test_config(root.path(), true)).scan().unwrap();
+        let names = indexed_names(&snapshot);
+
+        assert!(names.contains(&"keep.rs".to_string()));
+        assert!(names.contains(&"important.log".to_string()));
+        assert!(!names.contains(&"skip.rs".to_string()));
+        assert!(!names.contains(&"app.log".to_string()));
+    }
+
+    #[test]
+    fn gitignore_support_can_be_disabled() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(".gitignore"), "ignored/\n*.log\n").unwrap();
+        std::fs::create_dir(root.path().join("ignored")).unwrap();
+        std::fs::write(root.path().join("ignored/skip.rs"), "").unwrap();
+        std::fs::write(root.path().join("app.log"), "").unwrap();
+
+        let snapshot = Scanner::new(test_config(root.path(), false))
+            .scan()
+            .unwrap();
+        let names = indexed_names(&snapshot);
+
+        assert!(names.contains(&"skip.rs".to_string()));
+        assert!(names.contains(&"app.log".to_string()));
+    }
+
+    #[test]
+    fn watcher_filter_uses_gitignore_rules_for_incremental_paths() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(".gitignore"), "generated/\n").unwrap();
+        std::fs::create_dir(root.path().join("generated")).unwrap();
+        let ignored = root.path().join("generated/schema.rs");
+        std::fs::write(&ignored, "").unwrap();
+
+        let config = test_config(root.path(), true);
+
+        assert!(!should_index_path(&config, &ignored, false));
     }
 
     #[test]

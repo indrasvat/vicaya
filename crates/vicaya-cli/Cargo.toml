@@ -23,6 +23,12 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 num_cpus = "1.16"
 owo-colors = "4.1"
+ureq = { version = "3.3.0", features = ["json"] }
+semver = "1.0.28"
+sha2 = "0.11.0"
+flate2 = "1.1.9"
+tar = "0.4.46"
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -59,6 +59,7 @@ fn daemon_search_filter_scope_restricts_results_before_limit() {
     let config = Config {
         index_roots: vec![root.path().to_path_buf()],
         exclusions: vec![],
+        respect_ignore_files: true,
         index_path: vicaya_dir.path().join("index"),
         max_memory_mb: 128,
         performance: PerformanceConfig {

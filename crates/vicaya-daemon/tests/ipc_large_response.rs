@@ -61,6 +61,7 @@ fn it_handles_large_search_responses_without_truncation() {
     let config = Config {
         index_roots: vec![root.path().to_path_buf()],
         exclusions: vec![],
+        respect_ignore_files: true,
         index_path: vicaya_dir.path().join("index"),
         max_memory_mb: 128,
         performance: PerformanceConfig {
@@ -132,6 +133,7 @@ fn it_rejects_oversized_requests_and_stays_responsive() {
     let config = Config {
         index_roots: vec![root.path().to_path_buf()],
         exclusions: vec![],
+        respect_ignore_files: true,
         index_path: vicaya_dir.path().join("index"),
         max_memory_mb: 128,
         performance: PerformanceConfig {

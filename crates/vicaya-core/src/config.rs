@@ -12,6 +12,10 @@ pub struct Config {
     /// Paths to exclude from indexing.
     pub exclusions: Vec<String>,
 
+    /// Whether to respect repository ignore files such as .gitignore.
+    #[serde(default = "default_respect_ignore_files")]
+    pub respect_ignore_files: bool,
+
     /// Path to store the index data.
     pub index_path: PathBuf,
 
@@ -45,6 +49,7 @@ impl Default for Config {
                 "node_modules".to_string(),
                 "target".to_string(),
             ],
+            respect_ignore_files: true,
             index_path: Self::default_index_path(),
             max_memory_mb: 512,
             performance: PerformanceConfig {
@@ -55,6 +60,10 @@ impl Default for Config {
         config.normalize_exclusions();
         config
     }
+}
+
+fn default_respect_ignore_files() -> bool {
+    true
 }
 
 impl Config {
@@ -196,6 +205,7 @@ reconcile_hour = 3
             config.index_roots[1],
             PathBuf::from(format!("{home}/Projects"))
         );
+        assert!(config.respect_ignore_files);
 
         // Verify tilde expansion in index_path
         assert_eq!(
@@ -225,6 +235,7 @@ reconcile_hour = 3
         let config = Config {
             index_roots: vec![PathBuf::from("/test/root")],
             exclusions: vec![".git".to_string(), "target".to_string()],
+            respect_ignore_files: true,
             index_path: PathBuf::from("/test/index"),
             max_memory_mb: 256,
             performance: PerformanceConfig {

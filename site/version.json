@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "project": "vicaya",
+  "version": "1.2.4",
+  "tag_name": "v1.2.4",
+  "release_url": "https://github.com/indrasvat/vicaya/releases/tag/v1.2.4",
+  "tarball_url": "https://github.com/indrasvat/vicaya/releases/download/v1.2.4/vicaya-universal.tar.gz",
+  "checksum_url": "https://github.com/indrasvat/vicaya/releases/download/v1.2.4/vicaya-universal.tar.gz.sha256",
+  "generated_at": "1970-01-01T00:00:00Z"
+}

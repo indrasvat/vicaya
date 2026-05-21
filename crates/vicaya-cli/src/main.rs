@@ -2,6 +2,7 @@
 
 mod ipc_client;
 mod metrics;
+mod upgrade;
 
 use clap::{ArgAction, Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Internal helper used for non-blocking update checks
+    #[command(name = "__refresh-update-cache", hide = true)]
+    RefreshUpdateCache,
+
     /// Initialize configuration (creates config file if it doesn't exist)
     Init {
         /// Force overwrite existing config
@@ -69,6 +74,12 @@ enum Commands {
     /// Show runtime metrics (process, vmmap, index)
     Metrics(metrics::MetricsArgs),
 
+    /// Upgrade vicaya to the latest GitHub release
+    Upgrade(upgrade::UpgradeArgs),
+
+    /// Alias for `upgrade`
+    Update(upgrade::UpgradeArgs),
+
     /// Manage the daemon
     Daemon {
         #[command(subcommand)]
@@ -96,10 +107,15 @@ fn main() -> Result<()> {
             "{}",
             vicaya_core::build_info::BUILD_INFO.version_line("vicaya")
         );
+        upgrade::print_cached_notice();
+        upgrade::spawn_background_refresh();
         return Ok(());
     }
 
     match cli.command {
+        Some(Commands::RefreshUpdateCache) => {
+            upgrade::refresh_cache_silently();
+        }
         Some(Commands::Init { force }) => {
             init_config(force)?;
         }
@@ -119,6 +135,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::Metrics(args)) => {
             metrics::run(args)?;
+        }
+        Some(Commands::Upgrade(args)) | Some(Commands::Update(args)) => {
+            if let Err(err) = upgrade::run(args) {
+                upgrade::print_error(&err);
+                std::process::exit(1);
+            }
         }
         Some(Commands::Daemon { action }) => {
             daemon_command(action)?;
@@ -788,6 +810,12 @@ exclusions = [
     ".nyc_output",
 ]
 
+# Respect repository ignore files during indexing.
+# This reads .gitignore, .ignore, and .git/info/exclude where present.
+# Changing this affects which paths are indexed; restart the daemon and rebuild
+# after toggling it.
+respect_ignore_files = true
+
 # Where to store the index file
 index_path = "{}"
 
@@ -823,6 +851,7 @@ reconcile_hour = 3
     println!("  • IDEs: .idea, .vscode, .vs");
     println!("  • Cache/temp: .cache, *.tmp, *.log");
     println!("  • macOS: .DS_Store, ._*");
+    println!("  • Repository ignore files: .gitignore, .ignore, .git/info/exclude");
     println!();
     println!("Next steps:");
     println!("  1. Edit {} to customize", config_path.display());
@@ -848,6 +877,21 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cli_parses_upgrade_aliases() {
+        let upgrade = Cli::parse_from(["vicaya", "upgrade", "--check"]);
+        assert!(matches!(
+            upgrade.command,
+            Some(Commands::Upgrade(upgrade::UpgradeArgs { check: true, .. }))
+        ));
+
+        let update = Cli::parse_from(["vicaya", "update", "--force"]);
+        assert!(matches!(
+            update.command,
+            Some(Commands::Update(upgrade::UpgradeArgs { force: true, .. }))
+        ));
     }
 
     #[test]

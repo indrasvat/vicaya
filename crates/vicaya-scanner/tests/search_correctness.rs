@@ -15,6 +15,7 @@ fn create_test_config(root: &Path) -> Config {
     Config {
         index_roots: vec![root.to_path_buf()],
         exclusions: vec![".DS_Store".to_string(), ".vicaya-index".to_string()],
+        respect_ignore_files: true,
         index_path: root.join(".vicaya-index"),
         max_memory_mb: 128,
         performance: vicaya_core::config::PerformanceConfig {

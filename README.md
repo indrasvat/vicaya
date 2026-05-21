@@ -2,15 +2,20 @@
 
 [![Release](https://img.shields.io/github/v/release/indrasvat/vicaya?sort=semver)](https://github.com/indrasvat/vicaya/releases) [![codecov](https://codecov.io/gh/indrasvat/vicaya/branch/main/graph/badge.svg)](https://codecov.io/gh/indrasvat/vicaya)
 
-**विचय** — blazing-fast filesystem search for macOS in Rust.
+**विचय** — blazing-fast terminal-native file finding for macOS in Rust.
 
-vicaya is a macOS-native filesystem search tool inspired by "Everything" on Windows. It provides instant, interactive search-as-you-type results for finding files and folders by name.
+Project site and release manifest: <https://indrasvat.github.io/vicaya/>
+
+vicaya is a lightweight developer file finder inspired by "Everything" on Windows. It finds files and folders by filename, path, and metadata; it does not index file contents. Use vicaya to locate the right path, then use tools like `ripgrep` when you need content search.
 
 ## Features
 
 - **Instant Search**: Sub-20ms search latency over millions of files
 - **Trigram Index**: Fast substring matching using trigram-based inverted index
 - **Live Updates**: FSEvents-based file watcher keeps index up-to-date
+- **Repo-Aware Indexing**: Honors `.gitignore`, `.ignore`, and `.git/info/exclude` by default
+- **Developer Ranking**: Prefers exact/prefix/abbreviation matches and demotes noisy dependency/cache paths
+- **Composable Output**: Table, plain, and JSON formats for shells, `fzf`, scripts, and agents
 - **Compact Index**: Efficient string arena + trigram index persisted to disk
 - **CLI, Daemon & TUI**: Command-line tools, always-on daemon, and terminal UI for instant results
 
@@ -80,6 +85,20 @@ vicaya --version
 vicaya-tui --version
 ```
 
+Future upgrades can be done in place:
+
+```bash
+vicaya upgrade --check
+vicaya upgrade
+```
+
+`vicaya update` is an alias. `vicaya --version` prints immediately and, when a
+fresh cached check knows about a newer release, adds an inline update notice
+telling you to run `vicaya upgrade` or `vicaya update`. The check reads the
+small static manifest at <https://indrasvat.github.io/vicaya/version.json>, so
+normal users avoid GitHub REST API rate limits. Set `VICAYA_NO_UPDATE_CHECK=1`
+to disable the background release check.
+
 ### Run the Stack
 
 ```bash
@@ -130,6 +149,10 @@ vicaya search "test" --format plain
 vicaya daemon start
 vicaya daemon status
 vicaya daemon stop
+
+# Upgrade installed release binaries
+vicaya upgrade --check
+vicaya upgrade
 ```
 
 Note: `vicaya search` auto-starts the daemon if needed. If an existing on-disk index is present,
@@ -177,6 +200,12 @@ By default, vicaya stores state under `~/Library/Application Support/vicaya`:
 - `index/index.bin` / `index/index.journal` (snapshot + incremental updates)
 
 Use `VICAYA_DIR=/path/to/dir` to override the base directory (useful for tests and multi-instance setups).
+
+`respect_ignore_files = true` is the default. It honors `.gitignore`, `.ignore`,
+and `.git/info/exclude` during indexing; toggle it in `config.toml` only when you
+want ignored build artifacts or generated files to appear in results. Because
+this changes index membership, restart the daemon and run `vicaya rebuild` after
+changing it.
 
 ## Make Targets Reference
 
@@ -245,6 +274,18 @@ Releases are managed by Release Please:
 4. Download and smoke-test the latest release with the commands in [Install Latest Release](#install-latest-release).
 
 Each artifact bundle contains the CLI (`vicaya`), daemon (`vicaya-daemon`), and TUI (`vicaya-tui`) binaries so you can exercise the full stack.
+
+The self-updater consumes the same release artifacts. After the release assets
+are uploaded, the Release workflow publishes the GitHub Pages site at
+<https://indrasvat.github.io/vicaya/> and writes
+<https://indrasvat.github.io/vicaya/version.json>. `vicaya upgrade` reads that
+static manifest first, downloads `vicaya-universal.tar.gz` and its SHA256 file,
+verifies the checksum, stops the daemon if it is running, replaces `vicaya`,
+`vicaya-daemon`, and `vicaya-tui` atomically in the current install directory,
+then restarts the daemon unless `--no-restart-daemon` is passed. Use
+`--install-dir <dir>` for non-standard installs and `--force` to reinstall the
+latest version. If the Pages manifest is unavailable, the CLI can still fall
+back to the GitHub Releases API.
 
 For fully automated release PRs, configure a `RELEASE_PLEASE_TOKEN` repository secret backed by a fine-grained PAT or GitHub App token with contents and pull-request write access. The workflow can fall back to `GITHUB_TOKEN`, but GitHub suppresses CI triggers for pull requests created by `GITHUB_TOKEN`, so the dedicated token is the production-safe path.
 
