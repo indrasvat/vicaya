@@ -392,8 +392,8 @@ dd {
 
 .system {
   display: grid;
-  grid-template-columns: minmax(0, 0.82fr) minmax(420px, 1fr);
-  gap: 42px;
+  grid-template-columns: minmax(280px, 0.72fr) minmax(720px, 1.28fr);
+  gap: 44px;
   align-items: center;
   border-top: 1px solid var(--line-soft);
   background:
@@ -404,7 +404,7 @@ dd {
 .component-visual {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 84px minmax(180px, 0.9fr) 84px minmax(0, 1fr);
+  grid-template-columns: minmax(160px, 1fr) 72px minmax(190px, 0.95fr) 72px minmax(160px, 1fr);
   align-items: center;
   min-height: 260px;
   padding: 22px;
@@ -634,7 +634,7 @@ footer a:hover {
   color: var(--accent);
 }
 
-@media (max-width: 1120px) {
+@media (max-width: 1280px) {
   h1 {
     font-size: 5rem;
   }
