@@ -6,6 +6,19 @@
 * **release:** support workspace version inheritance ([8bb0ea6](https://github.com/indrasvat/vicaya/commit/8bb0ea632c5a2e9fc01504839fb997895f29a9d7))
 * **release:** use release pr workflow ([b868bdb](https://github.com/indrasvat/vicaya/commit/b868bdbbb1567def7ec22fd78dd9e934ea14f164))
 
+## [1.3.0](https://github.com/indrasvat/vicaya/compare/v1.2.4...v1.3.0) (2026-05-21)
+
+
+### Features
+
+* **cli:** add pages-backed self updater ([d15a672](https://github.com/indrasvat/vicaya/commit/d15a672396c132388cb99421f9c2e0c57a87b21a))
+
+
+### Bug Fixes
+
+* **site:** prevent mobile hero overlap ([1cbbe70](https://github.com/indrasvat/vicaya/commit/1cbbe70477308f58b112c92f6eff11b81b36e411))
+* **site:** widen desktop stack diagram ([f283a60](https://github.com/indrasvat/vicaya/commit/f283a608432da38fe290639e3d42866c59168e4e))
+
 ## [1.2.4](https://github.com/indrasvat/vicaya/compare/v1.2.3...v1.2.4) (2026-05-21)
 
 
