@@ -27,3 +27,13 @@ scanner_threads = 0
 
 # Hour to run reconciliation (0-23)
 reconcile_hour = 3
+
+[smriti]
+# Local usage memory for frecency ranking and the Smriti TUI view
+enabled = true
+
+# Maximum persisted path entries
+max_entries = 10000
+
+# Maximum score boost applied to matching search results
+max_boost = 0.08

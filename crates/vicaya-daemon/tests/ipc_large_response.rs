@@ -68,6 +68,7 @@ fn it_handles_large_search_responses_without_truncation() {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();
@@ -140,6 +141,7 @@ fn it_rejects_oversized_requests_and_stays_responsive() {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();

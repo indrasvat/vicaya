@@ -158,6 +158,8 @@ vicaya (विचय) is a macOS developer file finder that locates files and fo
 3. **Search Queries**
    - CLI/UI sends query to daemon via IPC.
    - `vicaya-index` runs trigram lookup + ranking → returns `Vec<SearchResult>`.
+   - `vicaya-daemon` applies a bounded local Smriti frecency boost to matching
+     results when usage memory is enabled.
 4. **Reconciliation**
    - Periodic "lightweight rescan" tasks from daemon (e.g., nightly) compare sampled filesystem snapshot vs index; queue fixes.
 
@@ -424,6 +426,10 @@ while the TUI can be launched directly into a scope with `vicaya-tui .` or
 
 3. **Preferences Storage**
    - Config file (TOML/JSON) under `~/Library/Application Support/vicaya/config.toml`.
+   - Smriti usage memory under `~/Library/Application Support/vicaya/smriti.json`;
+     corrupt files are quarantined as `smriti.json.corrupt.<timestamp>`
+     records local path/action counters only; it can be disabled with
+     `[smriti] enabled = false` or `VICAYA_NO_SMRITI=1`.
    - Read on startup, watch for changes; UI can edit these settings and trigger daemon reload.
 
 4. **Error Handling & UX**

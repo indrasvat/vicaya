@@ -4,6 +4,7 @@ use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 use vicaya_core::ipc::{Request, Response};
+use vicaya_core::smriti::{SmritiAction, SmritiEntry};
 use vicaya_index::SearchResult;
 
 const IPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -133,6 +134,69 @@ impl IpcClient {
         match self.request(&req)? {
             Response::RebuildComplete { files_indexed } => Ok(files_indexed),
             Response::Error { message } => Err(anyhow::anyhow!("Rebuild error: {}", message)),
+            _ => Err(anyhow::anyhow!("Unexpected response")),
+        }
+    }
+
+    /// Record a best-effort Smriti usage event.
+    pub fn record_smriti(
+        &mut self,
+        path: &str,
+        query: &str,
+        action: SmritiAction,
+    ) -> anyhow::Result<()> {
+        let req = Request::SmritiRecord {
+            path: path.to_string(),
+            query: query.to_string(),
+            action,
+        };
+
+        match self.request(&req)? {
+            Response::Ok => Ok(()),
+            Response::Error { message } => Err(anyhow::anyhow!("Smriti error: {}", message)),
+            _ => Err(anyhow::anyhow!("Unexpected response")),
+        }
+    }
+
+    /// List Smriti usage entries.
+    pub fn smriti_list(
+        &mut self,
+        query: Option<&str>,
+        limit: usize,
+        filter_scope: Option<&std::path::Path>,
+    ) -> anyhow::Result<Vec<SmritiEntry>> {
+        let req = Request::SmritiList {
+            query: query.map(str::to_string),
+            limit,
+            filter_scope: filter_scope.map(|p| p.to_string_lossy().to_string()),
+        };
+
+        match self.request(&req)? {
+            Response::SmritiEntries { entries } => Ok(entries),
+            Response::Error { message } => Err(anyhow::anyhow!("Smriti error: {}", message)),
+            _ => Err(anyhow::anyhow!("Unexpected response")),
+        }
+    }
+
+    /// Forget one Smriti path.
+    pub fn smriti_forget(&mut self, path: &str) -> anyhow::Result<()> {
+        let req = Request::SmritiForget {
+            path: path.to_string(),
+        };
+
+        match self.request(&req)? {
+            Response::Ok => Ok(()),
+            Response::SmritiForgot { .. } => Ok(()),
+            Response::Error { message } => Err(anyhow::anyhow!("Smriti error: {}", message)),
+            _ => Err(anyhow::anyhow!("Unexpected response")),
+        }
+    }
+
+    /// Clear all Smriti usage memory.
+    pub fn smriti_clear(&mut self) -> anyhow::Result<()> {
+        match self.request(&Request::SmritiClear)? {
+            Response::Ok => Ok(()),
+            Response::Error { message } => Err(anyhow::anyhow!("Smriti error: {}", message)),
             _ => Err(anyhow::anyhow!("Unexpected response")),
         }
     }

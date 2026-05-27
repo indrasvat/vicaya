@@ -8,6 +8,7 @@ pub mod filter;
 pub mod ipc;
 pub mod logging;
 pub mod paths;
+pub mod smriti;
 
 pub use config::Config;
 pub use error::{Error, Result};

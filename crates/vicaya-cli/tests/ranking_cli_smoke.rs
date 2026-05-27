@@ -93,6 +93,7 @@ fn cli_search_returns_json_results() {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();

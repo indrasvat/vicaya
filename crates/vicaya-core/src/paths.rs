@@ -35,6 +35,11 @@ pub fn socket_path() -> PathBuf {
     vicaya_dir().join("daemon.sock")
 }
 
+/// Path to the local Smriti usage memory file.
+pub fn smriti_path() -> PathBuf {
+    vicaya_dir().join("smriti.json")
+}
+
 /// Expand `~` and environment variables in a user-supplied path.
 pub fn expand_user_path(path: &Path) -> PathBuf {
     let path_str = path.to_string_lossy();
@@ -44,16 +49,20 @@ pub fn expand_user_path(path: &Path) -> PathBuf {
     }
 }
 
-/// Resolve a user-supplied directory path to an absolute normalized directory.
-pub fn resolve_scope_dir(path: &Path) -> Result<PathBuf> {
+/// Resolve a user-supplied path to an absolute normalized path without requiring it to exist.
+pub fn resolve_user_path(path: &Path) -> Result<PathBuf> {
     let expanded = expand_user_path(path);
     let absolute = if expanded.is_absolute() {
         expanded
     } else {
         std::env::current_dir()?.join(expanded)
     };
+    Ok(normalize_absolute_path(&absolute))
+}
 
-    let normalized = normalize_absolute_path(&absolute);
+/// Resolve a user-supplied directory path to an absolute normalized directory.
+pub fn resolve_scope_dir(path: &Path) -> Result<PathBuf> {
+    let normalized = resolve_user_path(path)?;
     let metadata = std::fs::metadata(&normalized).map_err(|err| {
         Error::Other(format!(
             "Failed to resolve scope directory '{}': {}",
@@ -122,6 +131,20 @@ mod tests {
             expand_user_path(Path::new("~/Documents")),
             PathBuf::from(home).join("Documents")
         );
+    }
+
+    #[test]
+    fn resolve_user_path_canonicalizes_relative_without_requiring_existence() {
+        let _lock = test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let old_cwd = std::env::current_dir().unwrap();
+        let _cwd_guard = CwdGuard(old_cwd);
+        std::env::set_current_dir(dir.path()).unwrap();
+        let expected_root = std::env::current_dir().unwrap();
+
+        let resolved = resolve_user_path(Path::new("./alpha/../missing.txt")).unwrap();
+
+        assert_eq!(resolved, expected_root.join("missing.txt"));
     }
 
     #[test]

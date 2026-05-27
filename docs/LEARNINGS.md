@@ -88,6 +88,12 @@ This document captures execution-time learnings that should be applied to every 
 - Automation must rebuild branch binaries before runs so the visual pass exercises the code that was just changed.
 - This matters especially for Task `003`, where unit tests may pass against current source while the TUI automation accidentally exercises an older release binary.
 
+## shux TUI Automation Hygiene
+
+- `shux pane wait-for` takes `--timeout-ms`; using `--timeout` fails before the TUI has a chance to settle.
+- Pass daemon isolation through the command launched inside shux, for example `env VICAYA_DIR=... VICAYA_DAEMON_BIN=... target/release/vicaya-tui`, so the pane talks to the expected branch-local daemon.
+- When opening a selected result in vicaya-tui automation, first move focus from the query input into the result list; sending Enter while input is focused submits the query instead of recording an open action.
+
 ## Task Workflow Rule
 
 - Before starting any later task in this issue batch:

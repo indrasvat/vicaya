@@ -147,6 +147,9 @@ Client                    Daemon                      Index
   │                         │                           │
   │                         │  Vec<SearchResult>         │
   │                         │◄──────────────────────────│
+  │                         │  Apply bounded Smriti      │
+  │                         │  frecency boost            │
+  │                         │                           │
   │                         │                           │
   │  Response::SearchResults│                           │
   │ ◄────────────────────── │                           │
@@ -404,6 +407,8 @@ struct DaemonState {
     path_hasher: RandomState,                     // Deterministic path hashing
     path_to_id: HashMap<u64, FileId>,             // path_hash → FileId
     path_hash_collisions: HashMap<u64, Vec<FileId>>,  // Collision overflow
+    smriti_file: PathBuf,                         // smriti.json
+    smriti: SmritiStore,                          // Local usage memory
     inode_to_id: HashMap<(u64, u64), FileId>,     // (dev, ino) → FileId
     last_updated: i64,                            // Last update epoch seconds
     reconciling: bool,                            // True during rebuild
@@ -413,6 +418,28 @@ struct DaemonState {
 The dual path map (`path_to_id` + `path_hash_collisions`) avoids allocating
 vectors for the common case where path hashes are unique, while still handling
 collisions correctly.
+
+Smriti is local usage memory. The daemon records accepted user actions
+(`open`, `copy`, `reveal`, `print`, `enter`) through IPC, persists compact
+path/action counters to `smriti.json`, and applies a bounded frecency boost to
+normal matching search results. Smriti never creates non-matching search
+results in Patra/Sthana; it only reorders candidates that already matched the
+filename/path query. The Smriti TUI view lists usage-memory entries directly.
+
+### Smriti Persistence
+
+`smriti.json` lives beside the daemon state, normally:
+
+```text
+~/Library/Application Support/vicaya/smriti.json
+```
+
+The file is versioned JSON and written atomically via a temporary file, data
+sync, rename, and parent-directory sync. Corrupt Smriti state is quarantined as
+`smriti.json.corrupt.<timestamp>` before the daemon falls back to an empty
+store; unreadable state still degrades with a daemon warning so search and file
+actions continue to work. The feature can be disabled through
+`[smriti] enabled = false` or `VICAYA_NO_SMRITI=1`.
 
 ### Journal Persistence
 

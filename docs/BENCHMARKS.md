@@ -35,6 +35,14 @@ Key takeaways:
 - the improvement is largest when the query would otherwise compete with many
   global matches
 
+## 2026-05-27 Smriti Benchmark Harness
+
+`scripts/smriti-hyperfine.sh` builds release binaries, indexes `~/` inside an
+isolated `VICAYA_DIR`, seeds representative Smriti entries, starts an isolated
+daemon, and runs `hyperfine` against home, current-repo, sibling-repo, and
+`smriti list` commands. The seed step is intentional: the benchmark exercises
+populated usage-memory ranking rather than only the empty-store fast path.
+
 ## Detailed Benchmark Results
 
 ### Test 1: Search for "main" (filename substring)

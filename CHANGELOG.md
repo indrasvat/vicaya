@@ -1,3 +1,13 @@
+## Unreleased
+
+### Features
+
+* **smriti:** add local usage-memory ranking and TUI history view
+
+### Bug Fixes
+
+* **smriti:** preserve base ranking tie-breakers and quarantine corrupt usage stores
+
 ## [1.2.2](https://github.com/indrasvat/vicaya/compare/v1.2.1...v1.2.2) (2026-05-19)
 
 
