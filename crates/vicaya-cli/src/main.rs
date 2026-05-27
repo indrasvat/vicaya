@@ -688,12 +688,18 @@ fn smriti_command(action: SmritiActionCli) -> Result<()> {
             }
         }
         SmritiActionCli::Forget { path } => {
-            let path = vicaya_core::paths::expand_user_path(&path);
+            let path = vicaya_core::paths::resolve_user_path(&path)?;
             let request = Request::SmritiForget {
                 path: path.to_string_lossy().to_string(),
             };
             match IpcClient::connect()?.request(&request)? {
                 Response::Ok => println!("Forgot Smriti entry: {}", path.display()),
+                Response::SmritiForgot { removed: true } => {
+                    println!("Forgot Smriti entry: {}", path.display())
+                }
+                Response::SmritiForgot { removed: false } => {
+                    println!("No matching Smriti entry: {}", path.display())
+                }
                 Response::Error { message } => eprintln!("Error: {}", message),
                 _ => eprintln!("Unexpected response from daemon"),
             }

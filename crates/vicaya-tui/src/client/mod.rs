@@ -186,6 +186,7 @@ impl IpcClient {
 
         match self.request(&req)? {
             Response::Ok => Ok(()),
+            Response::SmritiForgot { .. } => Ok(()),
             Response::Error { message } => Err(anyhow::anyhow!("Smriti error: {}", message)),
             _ => Err(anyhow::anyhow!("Unexpected response")),
         }

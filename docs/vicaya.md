@@ -426,7 +426,8 @@ while the TUI can be launched directly into a scope with `vicaya-tui .` or
 
 3. **Preferences Storage**
    - Config file (TOML/JSON) under `~/Library/Application Support/vicaya/config.toml`.
-   - Smriti usage memory under `~/Library/Application Support/vicaya/smriti.json`
+   - Smriti usage memory under `~/Library/Application Support/vicaya/smriti.json`;
+     corrupt files are quarantined as `smriti.json.corrupt.<timestamp>`
      records local path/action counters only; it can be disabled with
      `[smriti] enabled = false` or `VICAYA_NO_SMRITI=1`.
    - Read on startup, watch for changes; UI can edit these settings and trigger daemon reload.

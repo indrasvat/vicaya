@@ -218,8 +218,10 @@ changing it.
 
 `[smriti] enabled = true` is the default. Smriti never indexes file contents or
 sends usage data anywhere; it only stores local path/action counters in
-`smriti.json`. Set `VICAYA_NO_SMRITI=1` or disable `[smriti] enabled` when you
-want searches to ignore usage memory entirely.
+`smriti.json`. Corrupt Smriti state is moved aside as
+`smriti.json.corrupt.<timestamp>` before Vicaya starts a fresh store. Set
+`VICAYA_NO_SMRITI=1` or disable `[smriti] enabled` when you want searches to
+ignore usage memory entirely.
 
 ## Make Targets Reference
 

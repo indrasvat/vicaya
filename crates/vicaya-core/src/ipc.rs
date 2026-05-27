@@ -102,6 +102,8 @@ pub enum Response {
     Ok,
     /// Smriti usage entries.
     SmritiEntries { entries: Vec<SmritiEntry> },
+    /// Result of forgetting one Smriti path.
+    SmritiForgot { removed: bool },
     /// Error occurred.
     Error { message: String },
 }
@@ -304,6 +306,11 @@ mod tests {
         let json = entries.to_json().unwrap();
         let decoded = Response::from_json(&json).unwrap();
         assert!(matches!(decoded, Response::SmritiEntries { entries } if entries.is_empty()));
+
+        let forgot = Response::SmritiForgot { removed: true };
+        let json = forgot.to_json().unwrap();
+        let decoded = Response::from_json(&json).unwrap();
+        assert!(matches!(decoded, Response::SmritiForgot { removed: true }));
 
         // Test Error response
         let error = Response::Error {

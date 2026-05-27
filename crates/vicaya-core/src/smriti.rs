@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: u16 = 1;
@@ -131,8 +132,17 @@ impl SmritiStore {
             return Ok(Self::default());
         }
         let content = std::fs::read_to_string(path)?;
-        let mut store: Self =
-            serde_json::from_str(&content).map_err(|e| crate::Error::Config(e.to_string()))?;
+        let mut store: Self = match serde_json::from_str(&content) {
+            Ok(store) => store,
+            Err(err) => {
+                let corrupt_path = quarantine_corrupt_store(path)?;
+                return Err(crate::Error::Config(format!(
+                    "failed to parse Smriti store {}; quarantined corrupt copy at {}",
+                    err,
+                    corrupt_path.display()
+                )));
+            }
+        };
         if store.version == 0 {
             store.version = CURRENT_VERSION;
         }
@@ -148,10 +158,14 @@ impl SmritiStore {
             std::fs::create_dir_all(parent)?;
         }
         let tmp_path = temp_path(path);
-        let content =
-            serde_json::to_vec_pretty(self).map_err(|e| crate::Error::Config(e.to_string()))?;
-        std::fs::write(&tmp_path, content)?;
-        std::fs::rename(tmp_path, path)?;
+        let content = serde_json::to_vec(self).map_err(|e| crate::Error::Config(e.to_string()))?;
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(&content)?;
+        file.sync_data()?;
+        std::fs::rename(&tmp_path, path)?;
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
         Ok(())
     }
 
@@ -183,13 +197,18 @@ impl SmritiStore {
         if self.entries.len() <= max_entries {
             return;
         }
-        let mut ranked: Vec<(String, i64, u64)> = self
+        let mut ranked: Vec<(&String, i64, u64)> = self
             .entries
             .iter()
-            .map(|(path, entry)| (path.clone(), entry.last_used, entry.total_count))
+            .map(|(path, entry)| (path, entry.last_used, entry.total_count))
             .collect();
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
-        for (path, _, _) in ranked.into_iter().skip(max_entries) {
+        let to_remove: Vec<String> = ranked
+            .into_iter()
+            .skip(max_entries)
+            .map(|(path, _, _)| path.clone())
+            .collect();
+        for path in to_remove {
             self.entries.remove(&path);
         }
     }
@@ -208,7 +227,7 @@ impl SmritiStore {
     ) -> Vec<SmritiEntry> {
         let query = query.map(str::trim).filter(|q| !q.is_empty());
         let query_lower = query.map(str::to_lowercase);
-        let mut entries: Vec<SmritiEntry> = self
+        let mut entries: Vec<(&SmritiEntry, f32)> = self
             .entries
             .values()
             .filter(|entry| {
@@ -224,18 +243,20 @@ impl SmritiStore {
                 }
                 true
             })
-            .cloned()
+            .map(|entry| (entry, frecency_score(entry, now)))
             .collect();
         entries.sort_by(|a, b| {
-            frecency_score(b, now)
-                .partial_cmp(&frecency_score(a, now))
+            b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.last_used.cmp(&a.last_used))
-                .then_with(|| b.total_count.cmp(&a.total_count))
-                .then_with(|| a.path.cmp(&b.path))
+                .then_with(|| b.0.last_used.cmp(&a.0.last_used))
+                .then_with(|| b.0.total_count.cmp(&a.0.total_count))
+                .then_with(|| a.0.path.cmp(&b.0.path))
         });
-        entries.truncate(limit);
         entries
+            .into_iter()
+            .take(limit)
+            .map(|(entry, _)| entry.clone())
+            .collect()
     }
 
     /// Return the bounded ranking boost for a path at `now`.
@@ -246,7 +267,11 @@ impl SmritiStore {
         let Some(entry) = self.entries.get(path) else {
             return 0.0;
         };
-        let max_boost = max_boost.clamp(0.0, 1.0);
+        let max_boost = if max_boost.is_finite() {
+            max_boost.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         (frecency_score(entry, now) * max_boost).clamp(0.0, max_boost)
     }
 }
@@ -255,6 +280,20 @@ fn temp_path(path: &Path) -> PathBuf {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
     PathBuf::from(tmp)
+}
+
+fn quarantine_corrupt_store(path: &Path) -> crate::Result<PathBuf> {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "smriti.json".into());
+    let corrupt_path = path.with_file_name(format!("{file_name}.corrupt.{suffix}"));
+    std::fs::rename(path, &corrupt_path)?;
+    Ok(corrupt_path)
 }
 
 fn frecency_score(entry: &SmritiEntry, now: i64) -> f32 {
@@ -313,6 +352,10 @@ mod tests {
             0.0
         );
         assert!(store.boost_for_path("/tmp/repo/src/main.rs", 1_000, 2.0) <= 1.0);
+        assert_eq!(
+            store.boost_for_path("/tmp/repo/src/main.rs", 1_000, f32::NAN),
+            0.0
+        );
     }
 
     #[test]
@@ -354,6 +397,29 @@ mod tests {
         assert_eq!(
             loaded.entries["/tmp/repo/Cargo.toml"].last_action,
             SmritiAction::Reveal
+        );
+    }
+
+    #[test]
+    fn corrupt_store_is_quarantined_before_defaulting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("smriti.json");
+        std::fs::write(&path, "{not json").unwrap();
+
+        let err = SmritiStore::load(&path).unwrap_err();
+
+        assert!(err.to_string().contains("quarantined corrupt copy"));
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("smriti.json.corrupt."))
+                .count(),
+            1
         );
     }
 }

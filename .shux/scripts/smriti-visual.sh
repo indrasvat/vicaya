@@ -27,14 +27,11 @@ EOF
 cd "$ROOT"
 cargo build --release --workspace
 
-if pgrep -f "$ROOT/target/release/vicaya-daemon" >/dev/null 2>&1; then
-  "$ROOT/target/release/vicaya" daemon stop >/dev/null 2>&1 || true
-fi
-
 export VICAYA_DIR
 export VICAYA_DAEMON_BIN="$ROOT/target/release/vicaya-daemon"
 export VICAYA_NO_UPDATE_CHECK=1
 
+"$ROOT/target/release/vicaya" daemon stop >/dev/null 2>&1 || true
 "$ROOT/target/release/vicaya" rebuild
 "$ROOT/target/release/vicaya" daemon start
 trap '"$ROOT/target/release/vicaya" daemon stop >/dev/null 2>&1 || true; shux session kill "$SESSION" >/dev/null 2>&1 || true' EXIT

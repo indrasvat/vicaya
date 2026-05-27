@@ -434,10 +434,12 @@ filename/path query. The Smriti TUI view lists usage-memory entries directly.
 ~/Library/Application Support/vicaya/smriti.json
 ```
 
-The file is versioned JSON and written atomically via a temporary file +
-rename. Corrupt or unreadable Smriti state degrades to an empty store with a
-daemon warning; search and file actions must continue to work. The feature can
-be disabled through `[smriti] enabled = false` or `VICAYA_NO_SMRITI=1`.
+The file is versioned JSON and written atomically via a temporary file, data
+sync, rename, and parent-directory sync. Corrupt Smriti state is quarantined as
+`smriti.json.corrupt.<timestamp>` before the daemon falls back to an empty
+store; unreadable state still degrades with a daemon warning so search and file
+actions continue to work. The feature can be disabled through
+`[smriti] enabled = false` or `VICAYA_NO_SMRITI=1`.
 
 ### Journal Persistence
 

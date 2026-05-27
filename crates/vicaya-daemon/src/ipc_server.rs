@@ -796,27 +796,48 @@ fn apply_smriti_boosts(
     results: &mut Vec<vicaya_index::SearchResult>,
     limit: usize,
 ) {
-    if !state.config.smriti_enabled() || results.is_empty() {
+    if !state.config.smriti_enabled() || results.is_empty() || state.smriti.entries.is_empty() {
         results.truncate(limit);
         return;
     }
 
     let now = now_epoch_seconds();
     let max_boost = state.config.smriti.max_boost;
-    let boosted_score = |result: &vicaya_index::SearchResult| {
-        result.score + state.smriti.boost_for_path(&result.path, now, max_boost)
-    };
 
-    results.sort_by(|a, b| {
-        boosted_score(b)
-            .partial_cmp(&boosted_score(a))
+    let boosts: Vec<f32> = results
+        .iter()
+        .map(|result| state.smriti.boost_for_path(&result.path, now, max_boost))
+        .collect();
+    if boosts.iter().all(|boost| *boost <= 0.0) {
+        results.truncate(limit);
+        return;
+    }
+
+    let mut ranked: Vec<(usize, f32, vicaya_index::SearchResult)> = results
+        .drain(..)
+        .enumerate()
+        .map(|(idx, result)| {
+            let boosted_score = result.score + boosts[idx];
+            (idx, boosted_score, result)
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.mtime.cmp(&a.mtime))
-            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.0.cmp(&b.0))
     });
-    results.truncate(limit);
-    for result in results.iter_mut() {
-        result.score = boosted_score(result).min(1.0);
+
+    results.extend(
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, score, mut result)| {
+                result.score = score.min(1.0);
+                result
+            }),
+    );
+    if results.len() > limit {
+        results.truncate(limit);
     }
 }
 
@@ -1001,9 +1022,10 @@ fn truncate_journal(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn replace_state(state: &SharedState, rebuilt: DaemonState) {
+fn replace_state(state: &SharedState, mut rebuilt: DaemonState) {
     let old_state = {
         let mut state = state.write().unwrap();
+        rebuilt.smriti = std::mem::take(&mut state.smriti);
         std::mem::replace(&mut *state, rebuilt)
     };
 
@@ -1099,6 +1121,7 @@ struct IpcHandler {
     socket_path: PathBuf,
     journal_lock: Arc<Mutex<()>>,
     rebuild_lock: Arc<Mutex<()>>,
+    smriti_persist_lock: Arc<Mutex<()>>,
 }
 
 impl IpcServer {
@@ -1147,6 +1170,7 @@ impl IpcServer {
                 socket_path: socket_path.to_path_buf(),
                 journal_lock,
                 rebuild_lock,
+                smriti_persist_lock: Arc::new(Mutex::new(())),
             },
         })
     }
@@ -1260,7 +1284,10 @@ impl IpcHandler {
                     }
                 });
                 let trimmed_query_is_empty = query.trim().is_empty();
-                let search_limit = if state.config.smriti_enabled() && !trimmed_query_is_empty {
+                let search_limit = if state.config.smriti_enabled()
+                    && !state.smriti.entries.is_empty()
+                    && !trimmed_query_is_empty
+                {
                     limit
                         .saturating_mul(4)
                         .max(limit)
@@ -1366,15 +1393,22 @@ impl IpcHandler {
                 query,
                 action,
             } => {
-                let mut state = self.state.write().unwrap();
-                if !state.config.smriti_enabled() {
+                let _persist_guard = self.smriti_persist_lock.lock().unwrap();
+                let Some((store, smriti_file)) = ({
+                    let mut state = self.state.write().unwrap();
+                    if !state.config.smriti_enabled() {
+                        None
+                    } else {
+                        let now = now_epoch_seconds();
+                        state.smriti.record(path, query, action, now);
+                        let max_entries = state.config.smriti.max_entries;
+                        state.smriti.prune_to_limit(max_entries);
+                        Some((state.smriti.clone(), state.smriti_file.clone()))
+                    }
+                }) else {
                     return Response::Ok;
-                }
-                let now = now_epoch_seconds();
-                state.smriti.record(path, query, action, now);
-                let max_entries = state.config.smriti.max_entries;
-                state.smriti.prune_to_limit(max_entries);
-                match state.smriti.save_atomic(&state.smriti_file) {
+                };
+                match store.save_atomic(&smriti_file) {
                     Ok(()) => Response::Ok,
                     Err(e) => Response::Error {
                         message: format!("Failed to save Smriti usage memory: {}", e),
@@ -1403,25 +1437,42 @@ impl IpcHandler {
                 Response::SmritiEntries { entries }
             }
             Request::SmritiForget { path } => {
-                let mut state = self.state.write().unwrap();
-                if !state.config.smriti_enabled() {
-                    return Response::Ok;
+                let _persist_guard = self.smriti_persist_lock.lock().unwrap();
+                let Some((removed, store, smriti_file)) = ({
+                    let mut state = self.state.write().unwrap();
+                    if !state.config.smriti_enabled() {
+                        None
+                    } else {
+                        let removed = state.smriti.forget(&path);
+                        Some((removed, state.smriti.clone(), state.smriti_file.clone()))
+                    }
+                }) else {
+                    return Response::SmritiForgot { removed: false };
+                };
+                if !removed {
+                    return Response::SmritiForgot { removed };
                 }
-                state.smriti.forget(&path);
-                match state.smriti.save_atomic(&state.smriti_file) {
-                    Ok(()) => Response::Ok,
+                match store.save_atomic(&smriti_file) {
+                    Ok(()) => Response::SmritiForgot { removed },
                     Err(e) => Response::Error {
                         message: format!("Failed to save Smriti usage memory: {}", e),
                     },
                 }
             }
             Request::SmritiClear => {
-                let mut state = self.state.write().unwrap();
-                if !state.config.smriti_enabled() {
+                let _persist_guard = self.smriti_persist_lock.lock().unwrap();
+                let Some((store, smriti_file)) = ({
+                    let mut state = self.state.write().unwrap();
+                    if !state.config.smriti_enabled() {
+                        None
+                    } else {
+                        state.smriti.clear();
+                        Some((state.smriti.clone(), state.smriti_file.clone()))
+                    }
+                }) else {
                     return Response::Ok;
-                }
-                state.smriti.clear();
-                match state.smriti.save_atomic(&state.smriti_file) {
+                };
+                match store.save_atomic(&smriti_file) {
                     Ok(()) => Response::Ok,
                     Err(e) => Response::Error {
                         message: format!("Failed to save Smriti usage memory: {}", e),
@@ -1499,6 +1550,62 @@ mod tests {
             vicaya_dir.join("journal.log"),
             snapshot,
         )
+    }
+
+    #[test]
+    fn smriti_boosts_preserve_engine_order_without_memory() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        std::fs::write(root.path().join("server.go"), "package main\n").unwrap();
+        let state = build_state(root.path(), vicaya_dir.path());
+        let mut results = vec![
+            vicaya_index::SearchResult {
+                path: "/tmp/project/src/server.go".to_string(),
+                name: "server.go".to_string(),
+                score: 0.9,
+                size: 1,
+                mtime: 10,
+            },
+            vicaya_index::SearchResult {
+                path: "/tmp/project/node_modules/server.go".to_string(),
+                name: "server.go".to_string(),
+                score: 0.9,
+                size: 1,
+                mtime: 20,
+            },
+        ];
+
+        apply_smriti_boosts(&state, &mut results, 2);
+
+        assert_eq!(results[0].path, "/tmp/project/src/server.go");
+        assert_eq!(results[1].path, "/tmp/project/node_modules/server.go");
+    }
+
+    #[test]
+    fn replace_state_preserves_live_smriti_store() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[package]\n").unwrap();
+
+        let mut old = build_state(root.path(), vicaya_dir.path());
+        old.smriti.record(
+            "/tmp/live/Cargo.toml".to_string(),
+            "cargo".to_string(),
+            vicaya_core::smriti::SmritiAction::Open,
+            123,
+        );
+        let rebuilt = build_state(root.path(), vicaya_dir.path());
+        assert!(rebuilt.smriti.entries.is_empty());
+
+        let state = Arc::new(RwLock::new(old));
+        replace_state(&state, rebuilt);
+
+        assert!(state
+            .read()
+            .unwrap()
+            .smriti
+            .entries
+            .contains_key("/tmp/live/Cargo.toml"));
     }
 
     fn inode_key_for(state: &DaemonState, file_id: FileId) -> (u64, u64) {
@@ -1852,7 +1959,13 @@ mod tests {
             server.handle_request(Request::SmritiForget {
                 path: preferred.to_string_lossy().to_string(),
             }),
-            Response::Ok
+            Response::SmritiForgot { removed: true }
+        ));
+        assert!(matches!(
+            server.handle_request(Request::SmritiForget {
+                path: preferred.to_string_lossy().to_string(),
+            }),
+            Response::SmritiForgot { removed: false }
         ));
         match server.handle_request(Request::SmritiList {
             query: None,
