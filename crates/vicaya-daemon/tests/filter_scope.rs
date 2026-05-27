@@ -67,6 +67,7 @@ fn daemon_search_filter_scope_restricts_results_before_limit() {
             reconcile_hour: 3,
         },
         smriti: vicaya_core::config::SmritiConfig::default(),
+        content_search: vicaya_core::config::ContentSearchConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();

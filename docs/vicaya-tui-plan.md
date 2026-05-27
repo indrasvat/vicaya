@@ -247,9 +247,9 @@ A `Drishti` is: **data source + ranking + row template + preview strategy + acti
 
 6. `Antarvicaya` (Content, Grep)
    - Default `Ksetra`: current dir / git root (avoid full disk by default)
-   - Source: streaming `ripgrep` results (`path:line:col` + snippet)
-   - Preview: file centered on match with highlight
-   - Actions: open at line/col, copy location, refine query into filename search, narrow scope
+   - Source: scoped content results (`path:line:col` + snippet) using `rg`, then `git grep`, with slow `grep` explicit
+   - Preview: file centered near match with query highlight
+   - Actions: open file, copy path, print path, reveal, narrow scope
 
 7. `Sanketa` (Symbols)
    - Default `Ksetra`: project scope
@@ -365,10 +365,12 @@ Shipped (Phase 3):
 - [x] Implement `Ksetra` stack with breadcrumbs + `Pravesha`/`Nirgama`
 - [x] Add `Niyama` chips (`type`, `ext`, `path`, minimal `mtime/size`)
 - [x] Add `Varga` grouping toggle (none / dir / ext) without losing ranking
+- [x] Implement `Antarvicaya` content search drishti with `rg` / `git grep` / explicit `grep` policy
 
 Next up (Phase 4):
 
-- [ ] Implement `Antarvicaya` (Grep) `Drishti` (scoped `rg` streaming results)
+- [ ] Add open-at-line editor integration for `Antarvicaya` matches
+- [ ] Add richer match-context preview windows for very large files
 
 ### Phase 0 — Spec Lock (1–3 days)
 
@@ -396,8 +398,8 @@ Next up (Phase 4):
 
 ### Phase 4 — `Antarvicaya` (Grep) Drishti (1–2 weeks)
 
-- `rg` streaming results in scoped mode by default.
-- Preview anchored to match; open-at-line actions.
+- Scoped content results in the existing worker pipeline.
+- Preview anchored near match; open-at-line actions remain a follow-up.
 - Optional hybrid “index-assisted grep” to narrow candidate set.
 
 ### Phase 5 — Differentiators (Ongoing)

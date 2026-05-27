@@ -6,7 +6,7 @@
 
 Project site and release manifest: <https://indrasvat.github.io/vicaya/>
 
-vicaya is a lightweight developer file finder inspired by "Everything" on Windows. It finds files and folders by filename, path, and metadata; it does not index file contents. Use vicaya to locate the right path, then use tools like `ripgrep` when you need content search.
+vicaya is a lightweight developer file finder inspired by "Everything" on Windows. It keeps filename, path, and metadata search instant through its daemon index, and adds scoped content search through local tools when you need to look inside files.
 
 ## Features
 
@@ -16,6 +16,7 @@ vicaya is a lightweight developer file finder inspired by "Everything" on Window
 - **Repo-Aware Indexing**: Honors `.gitignore`, `.ignore`, and `.git/info/exclude` by default
 - **Developer Ranking**: Prefers exact/prefix/abbreviation matches and demotes noisy dependency/cache paths
 - **Smriti Frecency**: Learns local usage from opens/copies/reveals/prints to promote the paths you repeatedly choose
+- **Scoped Content Search**: `vicaya grep` and the `Antarvicaya` TUI drishti use `rg`, fall back to `git grep` in repos, and keep plain `grep` explicit
 - **Composable Output**: Table, plain, and JSON formats for shells, `fzf`, scripts, and agents
 - **Compact Index**: Efficient string arena + trigram index persisted to disk
 - **CLI, Daemon & TUI**: Command-line tools, always-on daemon, and terminal UI for instant results
@@ -128,6 +129,11 @@ vicaya rebuild
 vicaya search "main.rs" --limit 10
 vicaya search "query.rs" --scope ~/code/github.com/example-repo --limit 10
 
+# Search file contents without touching the daemon
+vicaya grep "fn main" --scope ~/code/github.com/example-repo --limit 20
+vicaya grep "TODO" --scope . --engine git-grep --format json
+vicaya grep "needle" --scope . --engine grep --allow-slow-fallback
+
 # Check daemon/index status
 vicaya status
 
@@ -173,7 +179,7 @@ The TUI connects to the same daemon and gives you instant, fuzzy-as-you-type res
 Highlights:
 
 - Split view: `phala` (results) + `purvadarshana` (preview with syntax highlighting)
-- `Ctrl+T` opens the searchable `drishti` switcher (Patra = Files, Sthana = Directories, Smriti = usage memory)
+- `Ctrl+T` opens the searchable `drishti` switcher (Patra = Files, Sthana = Directories, Smriti = usage memory, Antarvicaya = content)
 - `Enter` on a directory pushes `ksetra` scope; `h` pops scope (breadcrumbs in header)
 - Launch with `vicaya-tui .` or `vicaya-tui /some/dir` to start with `ksetra` already applied
 - `Niyama` filters in `prashna`: `type:file|dir`, `ext:rs,md`, `path:src/`, `mtime:<7d`, `size:>10mb`
@@ -222,6 +228,15 @@ sends usage data anywhere; it only stores local path/action counters in
 `smriti.json.corrupt.<timestamp>` before Vicaya starts a fresh store. Set
 `VICAYA_NO_SMRITI=1` or disable `[smriti] enabled` when you want searches to
 ignore usage memory entirely.
+
+`[content_search] enabled = true` is the default. `engine = "auto"` prefers
+`rg`, then `git grep` when the active scope is inside a git worktree. Plain
+recursive `grep` is intentionally opt-in via `--engine grep`,
+`--allow-slow-fallback`, or `[content_search] allow_slow_fallback = true`;
+this keeps search-as-you-type responsive when `rg` is not installed. Existing
+config files without a `[content_search]` table do not need migration; Vicaya
+applies these defaults in memory after upgrade. Set `VICAYA_NO_CONTENT_SEARCH=1`
+to disable the feature.
 
 ## Make Targets Reference
 

@@ -34,72 +34,76 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     let available_width = area.width.saturating_sub(4); // Account for borders
     let max_path_len = available_width.saturating_sub(30) as usize; // Reserve space for name, score, marker
 
-    let items: Vec<ListItem> = rows[start..end]
-        .iter()
-        .map(|row| match row {
-            RenderRow::Header(label) => {
-                let line = Line::from(vec![
-                    Span::styled("┈ ", Style::default().fg(ui::TEXT_MUTED)),
-                    Span::styled(
-                        label,
+    let items: Vec<ListItem> = if rows.is_empty() {
+        empty_rows(app)
+    } else {
+        rows[start..end]
+            .iter()
+            .map(|row| match row {
+                RenderRow::Header(label) => {
+                    let line = Line::from(vec![
+                        Span::styled("┈ ", Style::default().fg(ui::TEXT_MUTED)),
+                        Span::styled(
+                            label,
+                            Style::default()
+                                .fg(ui::TEXT_SECONDARY)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]);
+                    ListItem::new(line).style(Style::default())
+                }
+                RenderRow::Result(result_index) => {
+                    let result = &results[*result_index];
+                    let marker = if *result_index == selected {
+                        "▸"
+                    } else {
+                        " "
+                    };
+                    let score_color = ui::score_color(result.score);
+                    let is_selected = *result_index == selected;
+
+                    let path = std::path::Path::new(&result.path);
+                    let dir_path = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+
+                    // Truncate path if not selected
+                    let display_path = truncate_path(dir_path, max_path_len.max(30), is_selected);
+
+                    let mut spans = vec![
+                        Span::styled(marker, Style::default().fg(ui::PRIMARY)),
+                        Span::raw(" "),
+                    ];
+
+                    let (name, name_style) = if app.view == crate::state::ViewKind::Sthana {
+                        (format!("{}/", result.name), Style::default().fg(ui::ACCENT))
+                    } else {
+                        (result.name.clone(), Style::default().fg(ui::TEXT_PRIMARY))
+                    };
+
+                    spans.extend(vec![
+                        Span::styled(name, name_style),
+                        Span::raw(" "),
+                        Span::styled(
+                            format!("({}) ", display_path),
+                            Style::default().fg(ui::TEXT_MUTED),
+                        ),
+                        Span::styled(
+                            format!("{:.2}", result.score),
+                            Style::default().fg(score_color),
+                        ),
+                    ]);
+
+                    let line = Line::from(spans);
+                    let style = if is_selected {
+                        Style::default().bg(ui::BG_ELEVATED)
+                    } else {
                         Style::default()
-                            .fg(ui::TEXT_SECONDARY)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]);
-                ListItem::new(line).style(Style::default())
-            }
-            RenderRow::Result(result_index) => {
-                let result = &results[*result_index];
-                let marker = if *result_index == selected {
-                    "▸"
-                } else {
-                    " "
-                };
-                let score_color = ui::score_color(result.score);
-                let is_selected = *result_index == selected;
+                    };
 
-                let path = std::path::Path::new(&result.path);
-                let dir_path = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-
-                // Truncate path if not selected
-                let display_path = truncate_path(dir_path, max_path_len.max(30), is_selected);
-
-                let mut spans = vec![
-                    Span::styled(marker, Style::default().fg(ui::PRIMARY)),
-                    Span::raw(" "),
-                ];
-
-                let (name, name_style) = if app.view == crate::state::ViewKind::Sthana {
-                    (format!("{}/", result.name), Style::default().fg(ui::ACCENT))
-                } else {
-                    (result.name.clone(), Style::default().fg(ui::TEXT_PRIMARY))
-                };
-
-                spans.extend(vec![
-                    Span::styled(name, name_style),
-                    Span::raw(" "),
-                    Span::styled(
-                        format!("({}) ", display_path),
-                        Style::default().fg(ui::TEXT_MUTED),
-                    ),
-                    Span::styled(
-                        format!("{:.2}", result.score),
-                        Style::default().fg(score_color),
-                    ),
-                ]);
-
-                let line = Line::from(spans);
-                let style = if is_selected {
-                    Style::default().bg(ui::BG_ELEVATED)
-                } else {
-                    Style::default()
-                };
-
-                ListItem::new(line).style(style)
-            }
-        })
-        .collect();
+                    ListItem::new(line).style(style)
+                }
+            })
+            .collect()
+    };
 
     let border_style = if app.search.is_results_focused() {
         Style::default().fg(ui::BORDER_FOCUS)
@@ -130,6 +134,20 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     );
 
     f.render_widget(list.style(Style::default().bg(ui::BG_SURFACE)), area);
+}
+
+fn empty_rows(app: &AppState) -> Vec<ListItem<'static>> {
+    if let Some(error) = app.error.as_ref().filter(|msg| !msg.starts_with('✓')) {
+        return vec![ListItem::new(Line::from(vec![
+            Span::styled("! ", Style::default().fg(ui::ERROR)),
+            Span::styled(
+                error.clone(),
+                Style::default().fg(ui::ERROR).add_modifier(Modifier::BOLD),
+            ),
+        ]))];
+    }
+
+    Vec::new()
 }
 
 fn build_rows(app: &AppState) -> (Vec<RenderRow>, usize) {

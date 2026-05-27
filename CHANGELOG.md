@@ -2,6 +2,7 @@
 
 ### Features
 
+* **content-search:** add scoped grep CLI and Antarvicaya TUI drishti
 * **smriti:** add local usage-memory ranking and TUI history view
 
 ### Bug Fixes

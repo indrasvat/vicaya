@@ -4,7 +4,7 @@ mod ipc_client;
 mod metrics;
 mod upgrade;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 use tracing::info;
 use vicaya_core::ipc::{Request, Response};
@@ -57,6 +57,32 @@ enum Commands {
         scope: Option<PathBuf>,
     },
 
+    /// Search file contents in a scope
+    Grep {
+        /// Literal content query
+        query: String,
+
+        /// Maximum number of matches
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Output format (table, json, plain)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+
+        /// Restrict content search to this directory or file
+        #[arg(long, value_name = "PATH")]
+        scope: Option<PathBuf>,
+
+        /// Content search engine
+        #[arg(long, value_enum)]
+        engine: Option<ContentEngineCli>,
+
+        /// Permit recursive grep when ripgrep/git-grep are unavailable
+        #[arg(long)]
+        allow_slow_fallback: bool,
+    },
+
     /// Rebuild the index
     Rebuild {
         /// Dry run (don't actually write)
@@ -101,6 +127,25 @@ enum DaemonAction {
     Stop,
     /// Check daemon status
     Status,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ContentEngineCli {
+    Auto,
+    Ripgrep,
+    GitGrep,
+    Grep,
+}
+
+impl From<ContentEngineCli> for vicaya_core::content_search::ContentSearchEngineChoice {
+    fn from(value: ContentEngineCli) -> Self {
+        match value {
+            ContentEngineCli::Auto => Self::Auto,
+            ContentEngineCli::Ripgrep => Self::Ripgrep,
+            ContentEngineCli::GitGrep => Self::GitGrep,
+            ContentEngineCli::Grep => Self::Grep,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -165,6 +210,23 @@ fn main() -> Result<()> {
         }) => {
             search(&query, limit, &format, scope.as_deref())?;
         }
+        Some(Commands::Grep {
+            query,
+            limit,
+            format,
+            scope,
+            engine,
+            allow_slow_fallback,
+        }) => {
+            grep(
+                &query,
+                limit,
+                &format,
+                scope.as_deref(),
+                engine,
+                allow_slow_fallback,
+            )?;
+        }
         Some(Commands::Rebuild { dry_run }) => {
             rebuild(dry_run)?;
         }
@@ -196,6 +258,101 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn grep(
+    query: &str,
+    limit: usize,
+    format: &str,
+    scope: Option<&Path>,
+    engine: Option<ContentEngineCli>,
+    allow_slow_fallback: bool,
+) -> Result<()> {
+    let config = load_config()?;
+    if !config.content_search_enabled() {
+        return Err(vicaya_core::Error::Other(
+            "content search is disabled by config or VICAYA_NO_CONTENT_SEARCH".into(),
+        ));
+    }
+
+    let scope = scope
+        .map(resolve_content_scope)
+        .transpose()?
+        .unwrap_or(std::env::current_dir()?);
+    let engine = engine
+        .map(Into::into)
+        .map(Ok)
+        .unwrap_or_else(|| config.content_search_engine())?;
+
+    let mut options = vicaya_core::content_search::ContentSearchOptions::new(query, scope, limit);
+    options.engine = engine;
+    options.allow_slow_fallback =
+        allow_slow_fallback || config.content_search_allow_slow_fallback();
+    options.rg_path = config.content_search.rg_path.clone();
+
+    let report = vicaya_core::content_search::search(&options)?;
+
+    match format {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        }
+        "plain" => {
+            for hit in &report.hits {
+                let column = hit
+                    .column
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                println!(
+                    "{}:{}:{}:{}",
+                    hit.path.display(),
+                    hit.line_number,
+                    column,
+                    hit.line
+                );
+            }
+        }
+        _ => {
+            println!("Engine: {}", report.engine.label());
+            println!("{:<6} {:<10} {:<8} MATCH", "RANK", "LINE", "COL");
+            for (i, hit) in report.hits.iter().enumerate() {
+                let column = hit
+                    .column
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                println!(
+                    "{:<6} {:<10} {:<8} {}:{} {}",
+                    i + 1,
+                    hit.line_number,
+                    column,
+                    hit.path.display(),
+                    hit.line_number,
+                    hit.line.trim()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_content_scope(path: &Path) -> Result<PathBuf> {
+    let normalized = vicaya_core::paths::resolve_user_path(path)?;
+    let metadata = std::fs::metadata(&normalized).map_err(|err| {
+        vicaya_core::Error::Other(format!(
+            "Failed to resolve content search scope '{}': {}",
+            path.display(),
+            err
+        ))
+    })?;
+
+    if !metadata.is_dir() && !metadata.is_file() {
+        return Err(vicaya_core::Error::Other(format!(
+            "Content search scope '{}' is not a file or directory",
+            path.display()
+        )));
+    }
+
+    Ok(normalized)
 }
 
 fn build_search_request(query: &str, limit: usize, scope: Option<&Path>) -> Result<Request> {
@@ -978,6 +1135,14 @@ max_memory_mb = 512
 scanner_threads = {}
 # Hour of day (0-23) to run automatic reconciliation
 reconcile_hour = 3
+
+[content_search]
+# Content search powers `vicaya grep` and the Antarvicaya TUI drishti.
+enabled = true
+# auto prefers ripgrep, then git-grep inside a worktree.
+engine = "auto"
+# Keep this false unless you explicitly accept slower recursive grep fallback.
+allow_slow_fallback = false
 "#,
         index_dir.display(),
         num_cpus::get().max(2)
@@ -1025,6 +1190,34 @@ mod tests {
         match cli.command {
             Some(Commands::Search { scope, .. }) => {
                 assert_eq!(scope, Some(PathBuf::from("/tmp/repo")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_grep_engine_and_slow_fallback() {
+        let cli = Cli::parse_from([
+            "vicaya",
+            "grep",
+            "needle",
+            "--scope",
+            "/tmp/repo",
+            "--engine",
+            "git-grep",
+            "--allow-slow-fallback",
+        ]);
+
+        match cli.command {
+            Some(Commands::Grep {
+                scope,
+                engine,
+                allow_slow_fallback,
+                ..
+            }) => {
+                assert_eq!(scope, Some(PathBuf::from("/tmp/repo")));
+                assert!(matches!(engine, Some(ContentEngineCli::GitGrep)));
+                assert!(allow_slow_fallback);
             }
             other => panic!("unexpected command: {other:?}"),
         }

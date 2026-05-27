@@ -43,6 +43,27 @@ daemon, and runs `hyperfine` against home, current-repo, sibling-repo, and
 `smriti list` commands. The seed step is intentional: the benchmark exercises
 populated usage-memory ranking rather than only the empty-store fast path.
 
+## 2026-05-27 Content Search Drishti Snapshot
+
+Branch-local `hyperfine` runs used release binaries, an isolated
+`VICAYA_DIR`, and a branch-local daemon indexed to this checkout. Artifacts:
+`.shux/out/content-search/hyperfine-content-search.json` and
+`.shux/out/content-search/hyperfine-daemon-status-before.json`.
+
+| Command Shape | Mean Time |
+| --- | --- |
+| `vicaya search "main.rs" --scope <repo> --limit 20` | `6.7 ms ± 1.5 ms` |
+| `vicaya grep "fn main" --scope <repo> --limit 20` | `13.4 ms ± 3.1 ms` |
+| `VICAYA_CONTENT_SEARCH_ENGINE=git-grep vicaya grep "content search" --scope <repo> --limit 20` | `23.1 ms ± 1.5 ms` |
+
+Key takeaways:
+
+- filename search remains the fastest path and stays single-digit millisecond
+  in this scoped release run
+- `rg`-backed content search is still responsive enough for scoped daily use
+- `git grep` fallback is slower than `rg` here but remains comfortably
+  interactive for repo-scoped queries
+
 ## Detailed Benchmark Results
 
 ### Test 1: Search for "main" (filename substring)
@@ -131,10 +152,10 @@ Compression Ratio     ~6.6:1 (estimated)
 
 | Feature                    | vicaya | find | grep | locate |
 |----------------------------|--------|------|------|--------|
-| Substring Search           | ✅ 6ms | ❌ 85ms | ❌ 677ms | ✅ ~5ms* |
-| Instant Results            | ✅ Yes | ❌ No | ❌ No | ✅ Yes |
-| Real-time Updates          | ✅ macOS | ✅ N/A | ✅ N/A | ❌ Periodic |
-| Content Search             | ❌ No  | ❌ No | ✅ Yes | ❌ No |
+| Filename Substring Search  | ✅ 6ms | ❌ 85ms | ❌ 677ms | ✅ ~5ms* |
+| Instant Filename Results   | ✅ Yes | ❌ No | ❌ No | ✅ Yes |
+| Real-time Filename Updates | ✅ macOS | ✅ N/A | ✅ N/A | ❌ Periodic |
+| Scoped Content Search      | ✅ rg-backed, git-grep/grep fallback | ❌ No | ✅ Yes | ❌ No |
 | Memory Usage (42 files)    | ✅ 11KB | ✅ 0KB | ✅ 0KB | ~20KB* |
 | Cross-platform             | ❌ macOS | ✅ Yes | ✅ Yes | ✅ Yes |
 
@@ -149,9 +170,11 @@ Compression Ratio     ~6.6:1 (estimated)
 - Keeps index updated via watcher + journal + periodic reconciliation
 
 ### vs. grep  
-- **112x faster** for filename searches
-- grep optimized for content, not filenames
-- Not a fair comparison for grep's use case
+- **112x faster** for indexed filename searches
+- Uses `rg` first for scoped content search, then `git grep`, with standard
+  `grep` available as an explicit slow fallback
+- Content search is intentionally scoped and on-demand; Vicaya does not maintain
+  a full-text index
 
 ### vs. locate/mlocate
 - Similar query performance (both index-based)
@@ -178,7 +201,11 @@ Compression Ratio     ~6.6:1 (estimated)
 
 ## Conclusions
 
-vicaya delivers on its "blazing-fast" promise with **consistently sub-10ms queries** and **10-100x performance advantages** over traditional tools for filename searches.
+vicaya delivers on its "blazing-fast" promise with **consistently sub-10ms
+indexed filename queries** and **10-100x performance advantages** over
+traditional tools for filename searches. Scoped content search now remains
+interactive through `rg`/`git grep` without expanding the daemon index into a
+full-text store.
 
 The trigram-based index provides:
 - Instant substring matching

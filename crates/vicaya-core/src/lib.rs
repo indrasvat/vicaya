@@ -2,6 +2,7 @@
 
 pub mod build_info;
 pub mod config;
+pub mod content_search;
 pub mod daemon;
 pub mod error;
 pub mod filter;

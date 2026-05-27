@@ -513,7 +513,10 @@ impl ViewKind {
     }
 
     pub fn is_enabled(self) -> bool {
-        matches!(self, ViewKind::Patra | ViewKind::Sthana | ViewKind::Smriti)
+        matches!(
+            self,
+            ViewKind::Patra | ViewKind::Sthana | ViewKind::Smriti | ViewKind::Antarvicaya
+        )
     }
 }
 

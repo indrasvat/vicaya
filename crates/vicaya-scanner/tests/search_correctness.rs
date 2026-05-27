@@ -23,6 +23,7 @@ fn create_test_config(root: &Path) -> Config {
             reconcile_hour: 3,
         },
         smriti: vicaya_core::config::SmritiConfig::default(),
+        content_search: vicaya_core::config::ContentSearchConfig::default(),
     }
 }
 
