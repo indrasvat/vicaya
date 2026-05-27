@@ -10,14 +10,20 @@ const CURRENT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SmritiAction {
+    /// Opened a file in the configured editor.
     Open,
+    /// Copied a path to the clipboard.
     Copy,
+    /// Revealed a path in the platform file manager.
     Reveal,
+    /// Printed a path for shell consumption.
     Print,
+    /// Entered a directory as the active TUI scope.
     Enter,
 }
 
 impl SmritiAction {
+    /// Return the stable lowercase action name used in human-facing output.
     pub fn as_str(self) -> &'static str {
         match self {
             SmritiAction::Open => "open",
@@ -32,17 +38,29 @@ impl SmritiAction {
 /// One persisted Smriti path entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SmritiEntry {
+    /// Absolute path recorded for this entry.
     pub path: String,
+    /// File name derived from `path`, or the full path when no file name exists.
     pub name: String,
+    /// Total accepted actions recorded for this path.
     pub total_count: u64,
+    /// Number of editor-open actions recorded for this path.
     pub open_count: u64,
+    /// Number of copy-path actions recorded for this path.
     pub copy_count: u64,
+    /// Number of reveal-in-file-manager actions recorded for this path.
     pub reveal_count: u64,
+    /// Number of print-path actions recorded for this path.
     pub print_count: u64,
+    /// Number of enter-scope actions recorded for this path.
     pub enter_count: u64,
+    /// Epoch seconds when this path was first recorded.
     pub first_used: i64,
+    /// Epoch seconds when this path was most recently recorded.
     pub last_used: i64,
+    /// Last query text associated with an accepted action for this path.
     pub last_query: String,
+    /// Most recent action recorded for this path.
     pub last_action: SmritiAction,
 }
 
@@ -88,7 +106,9 @@ impl SmritiEntry {
 /// Versioned on-disk Smriti document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SmritiStore {
+    /// On-disk schema version.
     pub version: u16,
+    /// Path-keyed usage memory entries.
     pub entries: HashMap<String, SmritiEntry>,
 }
 
@@ -102,6 +122,10 @@ impl Default for SmritiStore {
 }
 
 impl SmritiStore {
+    /// Load a Smriti store from JSON, returning an empty store when the file is absent.
+    ///
+    /// JSON parse and filesystem errors are returned to the caller so the daemon can decide
+    /// whether to warn and continue with empty memory.
     pub fn load(path: &Path) -> crate::Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
@@ -115,6 +139,10 @@ impl SmritiStore {
         Ok(store)
     }
 
+    /// Persist the store as pretty JSON using a temporary file followed by `rename`.
+    ///
+    /// Parent directories are created as needed. Any write, serialization, or rename error is
+    /// returned and the caller should treat the in-memory store as authoritative.
     pub fn save_atomic(&self, path: &Path) -> crate::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -127,6 +155,10 @@ impl SmritiStore {
         Ok(())
     }
 
+    /// Record one accepted action for `path`.
+    ///
+    /// Existing entries increment action counters and update `last_used`, `last_query`, and
+    /// `last_action`; new entries derive their display name from the path.
     pub fn record(&mut self, path: String, query: String, action: SmritiAction, now: i64) {
         self.entries
             .entry(path.clone())
@@ -134,14 +166,19 @@ impl SmritiStore {
             .or_insert_with(|| SmritiEntry::new(path, query, action, now));
     }
 
+    /// Remove one path from usage memory.
+    ///
+    /// Returns `true` when an entry existed and was removed.
     pub fn forget(&mut self, path: &str) -> bool {
         self.entries.remove(path).is_some()
     }
 
+    /// Remove all usage memory entries.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 
+    /// Keep only the most recently and frequently used entries up to `max_entries`.
     pub fn prune_to_limit(&mut self, max_entries: usize) {
         if self.entries.len() <= max_entries {
             return;
@@ -157,6 +194,11 @@ impl SmritiStore {
         }
     }
 
+    /// Return Smriti entries ordered by frecency.
+    ///
+    /// Optional query filtering matches path or file name substrings. Optional scope filtering
+    /// keeps only entries whose paths start with that scope. The returned vector is truncated to
+    /// `limit`.
     pub fn list(
         &self,
         query: Option<&str>,
@@ -196,6 +238,10 @@ impl SmritiStore {
         entries
     }
 
+    /// Return the bounded ranking boost for a path at `now`.
+    ///
+    /// The result is clamped to `0.0..=max_boost`, and `max_boost` itself is sanitized to
+    /// `0.0..=1.0` so malformed config cannot panic or overboost results.
     pub fn boost_for_path(&self, path: &str, now: i64, max_boost: f32) -> f32 {
         let Some(entry) = self.entries.get(path) else {
             return 0.0;

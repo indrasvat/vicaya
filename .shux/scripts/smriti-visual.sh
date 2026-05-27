@@ -41,8 +41,7 @@ trap '"$ROOT/target/release/vicaya" daemon stop >/dev/null 2>&1 || true; shux se
 
 "$ROOT/target/release/vicaya" smriti clear --yes >/dev/null
 
-RESP="$(shux --format json session create "$SESSION" -d --title vicaya-smriti --cwd "$ROOT" -- env VICAYA_DIR="$VICAYA_DIR" VICAYA_DAEMON_BIN="$VICAYA_DAEMON_BIN" VICAYA_NO_UPDATE_CHECK=1 "$ROOT/target/release/vicaya-tui" "$ROOT")"
-PANE="$(printf '%s' "$RESP" | jq -r .pane_id)"
+shux --format json session create "$SESSION" -d --title vicaya-smriti --cwd "$ROOT" -- env VICAYA_DIR="$VICAYA_DIR" VICAYA_DAEMON_BIN="$VICAYA_DAEMON_BIN" VICAYA_NO_UPDATE_CHECK=1 "$ROOT/target/release/vicaya-tui" "$ROOT" >/dev/null
 shux pane set-size -s "$SESSION" --cols 140 --rows 42
 shux pane wait-for -s "$SESSION" --text "vicaya" --timeout-ms 10000
 shux --format json pane snapshot -s "$SESSION" | jq -r .png_base64 | base64 -d > "$OUT/01-patra-baseline.png"
@@ -56,8 +55,7 @@ shux pane send-keys -s "$SESSION" --data DQ==
 sleep 1
 shux session kill "$SESSION" >/dev/null 2>&1 || true
 
-RESP="$(shux --format json session create "$SESSION" -d --title vicaya-smriti --cwd "$ROOT" -- env VICAYA_DIR="$VICAYA_DIR" VICAYA_DAEMON_BIN="$VICAYA_DAEMON_BIN" VICAYA_NO_UPDATE_CHECK=1 "$ROOT/target/release/vicaya-tui" "$ROOT")"
-PANE="$(printf '%s' "$RESP" | jq -r .pane_id)"
+shux --format json session create "$SESSION" -d --title vicaya-smriti --cwd "$ROOT" -- env VICAYA_DIR="$VICAYA_DIR" VICAYA_DAEMON_BIN="$VICAYA_DAEMON_BIN" VICAYA_NO_UPDATE_CHECK=1 "$ROOT/target/release/vicaya-tui" "$ROOT" >/dev/null
 shux pane set-size -s "$SESSION" --cols 140 --rows 42
 shux pane wait-for -s "$SESSION" --text "vicaya" --timeout-ms 10000
 shux pane send-keys -s "$SESSION" --data FA==

@@ -43,8 +43,8 @@ fi
 
 hyperfine --warmup 20 --runs 100 \
   "$ROOT/target/release/vicaya search main.rs --limit 20 --format plain" \
-  "$ROOT/target/release/vicaya search config --scope $HOME --limit 20 --format plain" \
-  "$ROOT/target/release/vicaya search Cargo.toml --scope $REPO_A --limit 20 --format plain" \
-  "$ROOT/target/release/vicaya search README --scope $REPO_B --limit 20 --format plain" \
+  "$ROOT/target/release/vicaya search config --scope \"$HOME\" --limit 20 --format plain" \
+  "$ROOT/target/release/vicaya search Cargo.toml --scope \"$REPO_A\" --limit 20 --format plain" \
+  "$ROOT/target/release/vicaya search README --scope \"$REPO_B\" --limit 20 --format plain" \
   "$ROOT/target/release/vicaya smriti list --limit 50 --format plain" \
   --export-json "$OUT/hyperfine-smriti.json"

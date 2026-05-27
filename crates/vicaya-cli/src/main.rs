@@ -627,10 +627,17 @@ fn status(format: &str) -> Result<()> {
 }
 
 fn smriti_command(action: SmritiActionCli) -> Result<()> {
+    let daemon_messages_to_stderr = smriti_daemon_messages_to_stderr(&action);
     if !vicaya_core::daemon::is_running() {
-        println!("Daemon is not running. Starting daemon...");
+        print_smriti_daemon_message(
+            daemon_messages_to_stderr,
+            "Daemon is not running. Starting daemon...",
+        );
         let pid = vicaya_core::daemon::start_daemon()?;
-        println!("✓ Daemon started (PID: {})", pid);
+        print_smriti_daemon_message(
+            daemon_messages_to_stderr,
+            &format!("✓ Daemon started (PID: {})", pid),
+        );
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
@@ -706,6 +713,21 @@ fn smriti_command(action: SmritiActionCli) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn smriti_daemon_messages_to_stderr(action: &SmritiActionCli) -> bool {
+    matches!(
+        action,
+        SmritiActionCli::List { format, .. } if format == "json"
+    )
+}
+
+fn print_smriti_daemon_message(to_stderr: bool, message: &str) {
+    if to_stderr {
+        eprintln!("{}", message);
+    } else {
+        println!("{}", message);
+    }
 }
 
 fn format_number(n: usize) -> String {
@@ -1056,6 +1078,30 @@ mod tests {
                 action: SmritiActionCli::Clear { yes: true }
             })
         ));
+    }
+
+    #[test]
+    fn smriti_json_list_routes_daemon_start_messages_to_stderr() {
+        let json_list = SmritiActionCli::List {
+            query: None,
+            limit: 20,
+            format: "json".to_string(),
+            scope: None,
+        };
+        assert!(smriti_daemon_messages_to_stderr(&json_list));
+
+        let table_list = SmritiActionCli::List {
+            query: None,
+            limit: 20,
+            format: "table".to_string(),
+            scope: None,
+        };
+        assert!(!smriti_daemon_messages_to_stderr(&table_list));
+
+        let forget = SmritiActionCli::Forget {
+            path: PathBuf::from("Cargo.toml"),
+        };
+        assert!(!smriti_daemon_messages_to_stderr(&forget));
     }
 
     #[test]
