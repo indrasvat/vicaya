@@ -803,19 +803,21 @@ fn apply_smriti_boosts(
 
     let now = now_epoch_seconds();
     let max_boost = state.config.smriti.max_boost;
-    for result in results.iter_mut() {
-        result.score =
-            (result.score + state.smriti.boost_for_path(&result.path, now, max_boost)).min(1.0);
-    }
+    let boosted_score = |result: &vicaya_index::SearchResult| {
+        result.score + state.smriti.boost_for_path(&result.path, now, max_boost)
+    };
 
     results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
+        boosted_score(b)
+            .partial_cmp(&boosted_score(a))
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.mtime.cmp(&a.mtime))
             .then_with(|| a.path.cmp(&b.path))
     });
     results.truncate(limit);
+    for result in results.iter_mut() {
+        result.score = boosted_score(result).min(1.0);
+    }
 }
 
 fn hash_map_allocated_bytes<K, V>(map: &std::collections::HashMap<K, V>) -> usize {
@@ -1815,6 +1817,22 @@ mod tests {
                 );
             }
             other => panic!("unexpected search response: {other:?}"),
+        }
+
+        match server.handle_request(Request::Search {
+            query: "config.toml".to_string(),
+            limit: 2,
+            scope: Some(root.path().to_string_lossy().to_string()),
+            filter_scope: Some(root.path().to_string_lossy().to_string()),
+            recent_if_empty: false,
+        }) {
+            Response::SearchResults { results } => {
+                assert_eq!(
+                    results.first().map(|r| r.path.as_str()),
+                    Some(preferred.to_string_lossy().as_ref())
+                );
+            }
+            other => panic!("unexpected exact-name search response: {other:?}"),
         }
 
         match server.handle_request(Request::SmritiList {

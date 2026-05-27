@@ -44,21 +44,24 @@ pub struct PerformanceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmritiConfig {
     /// Whether local usage memory is enabled.
+    #[serde(default = "default_smriti_enabled")]
     pub enabled: bool,
 
     /// Maximum persisted path entries.
+    #[serde(default = "default_smriti_max_entries")]
     pub max_entries: usize,
 
     /// Maximum ranking boost applied to matching search results.
+    #[serde(default = "default_smriti_max_boost")]
     pub max_boost: f32,
 }
 
 impl Default for SmritiConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            max_entries: 10_000,
-            max_boost: 0.08,
+            enabled: default_smriti_enabled(),
+            max_entries: default_smriti_max_entries(),
+            max_boost: default_smriti_max_boost(),
         }
     }
 }
@@ -92,6 +95,18 @@ impl Default for Config {
 
 fn default_respect_ignore_files() -> bool {
     true
+}
+
+fn default_smriti_enabled() -> bool {
+    true
+}
+
+fn default_smriti_max_entries() -> usize {
+    10_000
+}
+
+fn default_smriti_max_boost() -> f32 {
+    0.08
 }
 
 impl Config {
@@ -258,6 +273,35 @@ reconcile_hour = 3
         assert_eq!(config.performance.reconcile_hour, 3);
         assert!(config.smriti.enabled);
         assert_eq!(config.smriti.max_entries, 10_000);
+    }
+
+    #[test]
+    fn test_config_loads_partial_smriti_table_with_defaults() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let config_content = r#"
+index_roots = ["~"]
+exclusions = ["target"]
+index_path = "~/Library/Application Support/vicaya"
+max_memory_mb = 512
+
+[performance]
+scanner_threads = 4
+reconcile_hour = 3
+
+[smriti]
+enabled = false
+"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(config_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+
+        assert!(!config.smriti.enabled);
+        assert_eq!(config.smriti.max_entries, 10_000);
+        assert_eq!(config.smriti.max_boost, 0.08);
     }
 
     #[test]
