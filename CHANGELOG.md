@@ -8,6 +8,13 @@
 
 * **smriti:** preserve base ranking tie-breakers and quarantine corrupt usage stores
 
+## [1.4.0](https://github.com/indrasvat/vicaya/compare/v1.3.0...v1.4.0) (2026-05-27)
+
+
+### Features
+
+* **smriti:** add usage memory ranking ([37571d7](https://github.com/indrasvat/vicaya/commit/37571d7ea5c53fd4f3fa70360d11f7ee43f5aace))
+
 ## [1.2.2](https://github.com/indrasvat/vicaya/compare/v1.2.1...v1.2.2) (2026-05-19)
 
 
