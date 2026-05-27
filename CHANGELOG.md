@@ -9,6 +9,13 @@
 
 * **smriti:** preserve base ranking tie-breakers and quarantine corrupt usage stores
 
+## [1.5.0](https://github.com/indrasvat/vicaya/compare/v1.4.0...v1.5.0) (2026-05-27)
+
+
+### Features
+
+* **content-search:** add antarvicaya grep ([05d7320](https://github.com/indrasvat/vicaya/commit/05d7320e072299ba0ef62dc03deef6b52fe34604))
+
 ## [1.4.0](https://github.com/indrasvat/vicaya/compare/v1.3.0...v1.4.0) (2026-05-27)
 
 
