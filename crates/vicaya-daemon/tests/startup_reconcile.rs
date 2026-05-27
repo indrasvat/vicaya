@@ -87,6 +87,7 @@ fn it_indexes_offline_changes_via_startup_reconcile() {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();
@@ -162,6 +163,7 @@ fn it_replays_journal_when_starting_from_existing_index() {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();
@@ -241,6 +243,7 @@ fn it_discards_stale_journal_when_starting_from_fresh_build() {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();

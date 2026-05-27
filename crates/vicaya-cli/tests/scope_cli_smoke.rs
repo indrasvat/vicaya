@@ -86,6 +86,7 @@ fn cli_search_scope_restricts_results_to_requested_directory() {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();

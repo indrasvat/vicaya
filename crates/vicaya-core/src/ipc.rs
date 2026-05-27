@@ -4,6 +4,7 @@ use std::io::BufRead;
 
 use serde::{Deserialize, Serialize};
 
+use crate::smriti::{SmritiAction, SmritiEntry};
 use crate::{Error, Result};
 
 /// Maximum newline-delimited IPC message size in bytes.
@@ -44,6 +45,25 @@ pub enum Request {
     Status,
     /// Trigger index rebuild.
     Rebuild { dry_run: bool },
+    /// Record a best-effort Smriti usage event.
+    SmritiRecord {
+        path: String,
+        #[serde(default)]
+        query: String,
+        action: SmritiAction,
+    },
+    /// List Smriti usage entries.
+    SmritiList {
+        #[serde(default)]
+        query: Option<String>,
+        limit: usize,
+        #[serde(default)]
+        filter_scope: Option<String>,
+    },
+    /// Forget one Smriti path.
+    SmritiForget { path: String },
+    /// Clear all Smriti usage memory.
+    SmritiClear,
     /// Shutdown the daemon.
     Shutdown,
 }
@@ -80,6 +100,8 @@ pub enum Response {
     RebuildComplete { files_indexed: usize },
     /// Operation succeeded.
     Ok,
+    /// Smriti usage entries.
+    SmritiEntries { entries: Vec<SmritiEntry> },
     /// Error occurred.
     Error { message: String },
 }
@@ -213,6 +235,22 @@ mod tests {
         let json = shutdown.to_json().unwrap();
         let decoded = Request::from_json(&json).unwrap();
         assert!(matches!(decoded, Request::Shutdown));
+
+        let record = Request::SmritiRecord {
+            path: "/tmp/file.rs".to_string(),
+            query: "file".to_string(),
+            action: SmritiAction::Open,
+        };
+        let json = record.to_json().unwrap();
+        let decoded = Request::from_json(&json).unwrap();
+        assert!(matches!(
+            decoded,
+            Request::SmritiRecord {
+                path,
+                query,
+                action: SmritiAction::Open
+            } if path == "/tmp/file.rs" && query == "file"
+        ));
     }
 
     #[test]
@@ -259,6 +297,13 @@ mod tests {
         let json = ok.to_json().unwrap();
         let decoded = Response::from_json(&json).unwrap();
         assert!(matches!(decoded, Response::Ok));
+
+        let entries = Response::SmritiEntries {
+            entries: Vec::new(),
+        };
+        let json = entries.to_json().unwrap();
+        let decoded = Response::from_json(&json).unwrap();
+        assert!(matches!(decoded, Response::SmritiEntries { entries } if entries.is_empty()));
 
         // Test Error response
         let error = Response::Error {

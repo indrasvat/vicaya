@@ -8,6 +8,7 @@ pub enum KriyaId {
     CopyPath,
     Reveal,
     PrintPath,
+    ForgetSmriti,
     TogglePreview,
     ToggleGrouping,
     PopKsetra,
@@ -92,6 +93,16 @@ fn available_kriyas(app: &AppState) -> Vec<KriyaItem> {
                 destructive: false,
             },
         ]);
+
+        if app.view == ViewKind::Smriti {
+            items.push(KriyaItem {
+                id: KriyaId::ForgetSmriti,
+                label: "Forget from smriti",
+                keys: "",
+                hint: "Remove this path from usage memory",
+                destructive: true,
+            });
+        }
     }
 
     if app.ksetra.depth() > 0 {

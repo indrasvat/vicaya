@@ -16,6 +16,7 @@ use ratatui::{
 };
 use std::io;
 use std::sync::mpsc;
+use vicaya_core::smriti::SmritiAction;
 
 /// Open a file in the user's preferred editor
 fn open_file_in_editor(path: &str) -> Result<()> {
@@ -239,6 +240,16 @@ fn run_app<B: ratatui::backend::Backend>(
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 handle_key_event(app, key.code, key.modifiers);
+                for event in app.smriti_events.drain(..) {
+                    let _ = cmd_tx.send(WorkerCommand::RecordSmriti {
+                        path: event.path,
+                        query: event.query,
+                        action: event.action,
+                    });
+                }
+                for path in app.smriti_forget_paths.drain(..) {
+                    let _ = cmd_tx.send(WorkerCommand::ForgetSmriti { path });
+                }
             }
         }
 
@@ -523,17 +534,20 @@ fn handle_results_keys(app: &mut AppState, key: KeyCode, modifiers: KeyModifiers
         }
         (KeyCode::Char('y'), KeyModifiers::NONE) => {
             if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.record_smriti_usage(path.clone(), SmritiAction::Copy);
                 copy_to_clipboard(&path, app);
             }
         }
         (KeyCode::Char('p'), KeyModifiers::NONE) => {
-            if let Some(result) = app.search.selected_result() {
-                app.print_on_exit = Some(result.path.clone());
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.record_smriti_usage(path.clone(), SmritiAction::Print);
+                app.print_on_exit = Some(path);
                 app.quit();
             }
         }
         (KeyCode::Char('r'), KeyModifiers::NONE) => {
             if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.record_smriti_usage(path.clone(), SmritiAction::Reveal);
                 reveal_in_finder(&path, app);
             }
         }
@@ -899,6 +913,7 @@ fn find_next_match_line(
 /// Open file in $EDITOR or fallback editor
 fn open_in_editor(path: &str, app: &mut AppState) {
     // Store path to open after TUI exits
+    app.record_smriti_usage(path.to_string(), SmritiAction::Open);
     app.open_in_editor = Some(path.to_string());
     app.quit();
 }
@@ -912,6 +927,7 @@ fn is_dir(path: &str, view: crate::state::ViewKind) -> bool {
 }
 
 fn push_ksetra(app: &mut AppState, path: String) {
+    app.record_smriti_usage(path.clone(), SmritiAction::Enter);
     app.ksetra.push(std::path::PathBuf::from(path));
     app.clear_results();
     app.preview.clear();
@@ -945,18 +961,29 @@ fn run_kriya_action(app: &mut AppState, id: crate::kriya::KriyaId) {
         }
         KriyaId::CopyPath => {
             if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.record_smriti_usage(path.clone(), SmritiAction::Copy);
                 copy_to_clipboard(&path, app);
             }
         }
         KriyaId::Reveal => {
             if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.record_smriti_usage(path.clone(), SmritiAction::Reveal);
                 reveal_in_finder(&path, app);
             }
         }
         KriyaId::PrintPath => {
             if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.record_smriti_usage(path.clone(), SmritiAction::Print);
                 app.print_on_exit = Some(path);
                 app.quit();
+            }
+        }
+        KriyaId::ForgetSmriti => {
+            if let Some(path) = app.search.selected_result().map(|r| r.path.clone()) {
+                app.forget_smriti_path(path.clone());
+                app.search.results.retain(|result| result.path != path);
+                app.search.clamp_selection();
+                app.error = Some(format!("✓ Forgot from smriti: {}", path));
             }
         }
         KriyaId::TogglePreview => {
@@ -1325,7 +1352,9 @@ mod tests {
         assert_eq!(app.mode, AppMode::Search);
 
         app.toggle_drishti_switcher();
-        handle_key_event(&mut app, KeyCode::Char('m'), KeyModifiers::NONE);
+        for ch in "git".chars() {
+            handle_key_event(&mut app, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
         handle_key_event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(app.view, ViewKind::Sthana);
         assert_eq!(app.mode, AppMode::Search);

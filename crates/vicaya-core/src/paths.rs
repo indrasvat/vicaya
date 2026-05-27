@@ -35,6 +35,11 @@ pub fn socket_path() -> PathBuf {
     vicaya_dir().join("daemon.sock")
 }
 
+/// Path to the local Smriti usage memory file.
+pub fn smriti_path() -> PathBuf {
+    vicaya_dir().join("smriti.json")
+}
+
 /// Expand `~` and environment variables in a user-supplied path.
 pub fn expand_user_path(path: &Path) -> PathBuf {
     let path_str = path.to_string_lossy();

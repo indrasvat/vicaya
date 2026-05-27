@@ -376,6 +376,7 @@ mod tests {
                 scanner_threads: 2,
                 reconcile_hour: 3,
             },
+            smriti: vicaya_core::config::SmritiConfig::default(),
         }
     }
 

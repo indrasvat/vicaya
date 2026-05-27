@@ -2,6 +2,7 @@
 
 use crate::client::DaemonStatus;
 use std::path::{Path, PathBuf};
+use vicaya_core::smriti::SmritiAction;
 use vicaya_index::SearchResult;
 
 /// Application mode
@@ -56,6 +57,18 @@ pub struct AppState {
     pub print_on_exit: Option<String>,
     /// Path to open in editor after exit
     pub open_in_editor: Option<String>,
+    /// Best-effort Smriti usage events queued for the worker.
+    pub smriti_events: Vec<SmritiUsageEvent>,
+    /// Smriti paths queued for forgetting.
+    pub smriti_forget_paths: Vec<String>,
+}
+
+/// A queued Smriti usage event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmritiUsageEvent {
+    pub path: String,
+    pub query: String,
+    pub action: SmritiAction,
 }
 
 impl AppState {
@@ -84,6 +97,8 @@ impl AppState {
             error: None,
             print_on_exit: None,
             open_in_editor: None,
+            smriti_events: Vec::new(),
+            smriti_forget_paths: Vec::new(),
         }
     }
 
@@ -101,6 +116,20 @@ impl AppState {
     /// Request quit
     pub fn quit(&mut self) {
         self.should_quit = true;
+    }
+
+    /// Queue a best-effort Smriti usage event.
+    pub fn record_smriti_usage(&mut self, path: String, action: SmritiAction) {
+        self.smriti_events.push(SmritiUsageEvent {
+            path,
+            query: self.search.query.clone(),
+            action,
+        });
+    }
+
+    /// Queue a best-effort Smriti forget request.
+    pub fn forget_smriti_path(&mut self, path: String) {
+        self.smriti_forget_paths.push(path);
     }
 
     /// Toggle help overlay
@@ -315,6 +344,11 @@ impl SearchState {
     pub fn set_results(&mut self, results: Vec<SearchResult>) {
         self.results = results;
         // Reset selection if out of bounds
+        self.clamp_selection();
+    }
+
+    /// Clamp selection to available results.
+    pub fn clamp_selection(&mut self) {
         if self.selected_index >= self.results.len() {
             self.selected_index = self.results.len().saturating_sub(1);
         }
@@ -479,7 +513,7 @@ impl ViewKind {
     }
 
     pub fn is_enabled(self) -> bool {
-        matches!(self, ViewKind::Patra | ViewKind::Sthana)
+        matches!(self, ViewKind::Patra | ViewKind::Sthana | ViewKind::Smriti)
     }
 }
 
@@ -988,8 +1022,8 @@ impl DrishtiSwitcherState {
             .iter()
             .copied()
             .filter(|view| {
-                view.label().to_lowercase().contains(&needle)
-                    || view.english_hint().to_lowercase().contains(&needle)
+                matches_view_filter(view.label(), &needle)
+                    || matches_view_filter(view.english_hint(), &needle)
             })
             .collect()
     }
@@ -1020,6 +1054,18 @@ impl DrishtiSwitcherState {
             self.selected_index - 1
         };
     }
+}
+
+fn matches_view_filter(value: &str, needle: &str) -> bool {
+    let value = value.to_lowercase();
+    value.contains(needle) || is_subsequence(needle, &value)
+}
+
+fn is_subsequence(needle: &str, value: &str) -> bool {
+    let mut chars = value.chars();
+    needle
+        .chars()
+        .all(|needle_char| chars.by_ref().any(|value_char| value_char == needle_char))
 }
 
 impl Default for DrishtiSwitcherState {
@@ -1659,7 +1705,8 @@ mod tests {
         assert_eq!(ViewKind::Patra.english_hint(), "Files");
         assert!(ViewKind::Patra.is_enabled());
         assert!(ViewKind::Sthana.is_enabled());
-        assert!(!ViewKind::Smriti.is_enabled());
+        assert!(ViewKind::Smriti.is_enabled());
+        assert!(!ViewKind::Itihasa.is_enabled());
     }
 
     #[test]
@@ -1667,12 +1714,18 @@ mod tests {
         let mut drishti = DrishtiSwitcherState::new();
         drishti.push_filter_char('d');
         assert!(drishti.matching_views().contains(&ViewKind::Sthana));
+        drishti.reset();
+        for c in "smi".chars() {
+            drishti.push_filter_char(c);
+        }
+        assert_eq!(drishti.matching_views(), vec![ViewKind::Smriti]);
         drishti.select_previous();
         assert!(drishti.selected_view().is_some());
         drishti.pop_filter_char();
-        assert_eq!(drishti.filter_query(), "");
+        assert_eq!(drishti.filter_query(), "sm");
         drishti.reset();
         assert_eq!(drishti.selected_index, 0);
+        assert_eq!(drishti.filter_query(), "");
 
         let mut kriya = KriyaSuchiState::new();
         kriya.select_previous(3);

@@ -70,6 +70,7 @@ fn write_config(vicaya_dir: &Path, root: &Path) {
             scanner_threads: 2,
             reconcile_hour: 3,
         },
+        smriti: vicaya_core::config::SmritiConfig::default(),
     };
     std::fs::create_dir_all(vicaya_dir).unwrap();
     config.save(&vicaya_dir.join("config.toml")).unwrap();

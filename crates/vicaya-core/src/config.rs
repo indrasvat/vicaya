@@ -24,6 +24,10 @@ pub struct Config {
 
     /// Performance settings.
     pub performance: PerformanceConfig,
+
+    /// Smriti usage-memory settings.
+    #[serde(default)]
+    pub smriti: SmritiConfig,
 }
 
 /// Performance-related configuration.
@@ -34,6 +38,29 @@ pub struct PerformanceConfig {
 
     /// Reconciliation hour (0-23).
     pub reconcile_hour: u8,
+}
+
+/// Smriti usage-memory configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmritiConfig {
+    /// Whether local usage memory is enabled.
+    pub enabled: bool,
+
+    /// Maximum persisted path entries.
+    pub max_entries: usize,
+
+    /// Maximum ranking boost applied to matching search results.
+    pub max_boost: f32,
+}
+
+impl Default for SmritiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: 10_000,
+            max_boost: 0.08,
+        }
+    }
 }
 
 impl Default for Config {
@@ -56,6 +83,7 @@ impl Default for Config {
                 scanner_threads: num_cpus::get(),
                 reconcile_hour: 3,
             },
+            smriti: SmritiConfig::default(),
         };
         config.normalize_exclusions();
         config
@@ -129,6 +157,11 @@ impl Config {
     pub fn ensure_index_dir(&self) -> crate::Result<()> {
         std::fs::create_dir_all(&self.index_path)?;
         Ok(())
+    }
+
+    /// Whether Smriti is enabled after environment overrides.
+    pub fn smriti_enabled(&self) -> bool {
+        self.smriti.enabled && std::env::var_os("VICAYA_NO_SMRITI").is_none()
     }
 }
 
@@ -223,6 +256,8 @@ reconcile_hour = 3
         assert!(config.exclusions.iter().all(|ex| !ex.starts_with('/')));
         assert_eq!(config.max_memory_mb, 512);
         assert_eq!(config.performance.reconcile_hour, 3);
+        assert!(config.smriti.enabled);
+        assert_eq!(config.smriti.max_entries, 10_000);
     }
 
     #[test]
@@ -242,6 +277,7 @@ reconcile_hour = 3
                 scanner_threads: 8,
                 reconcile_hour: 2,
             },
+            smriti: SmritiConfig::default(),
         };
 
         // Save

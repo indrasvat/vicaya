@@ -1,3 +1,9 @@
+## Unreleased
+
+### Features
+
+* **smriti:** add local usage-memory ranking and TUI history view
+
 ## [1.2.2](https://github.com/indrasvat/vicaya/compare/v1.2.1...v1.2.2) (2026-05-19)
 
 

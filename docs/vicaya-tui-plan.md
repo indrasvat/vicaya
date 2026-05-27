@@ -230,9 +230,10 @@ A `Drishti` is: **data source + ranking + row template + preview strategy + acti
    - Primary action: `Pravesha` (push `Ksetra`)
    - Secondary: print path for shell `cd`, reveal/open
 
-3. `Smriti` (Recent / Frecency-ready)
-   - Source: local history of opens/selections
-   - Helps “I was just here” navigation
+3. `Smriti` (Recent / Frecency)
+   - Status: shipped as a local usage-memory view
+   - Source: local history of accepted open/copy/reveal/print/scope actions
+   - Helps “I was just here” navigation and provides bounded frecency boosts to normal matching searches
 
 4. `Navatama` (Recently Modified)
    - Source: index sorted by mtime (global or scoped)
@@ -295,13 +296,13 @@ For a selected result, show why it ranked:
 
 This makes the system trustworthy and debuggable—especially when exclusions/scopes are involved.
 
-### 9.2 `Smriti` Personalization (Optional)
+### 9.2 `Smriti` Personalization (Shipped)
 
 Local-only and transparent:
 
 - Boost frequently/recently opened files
-- Display subtle indicator when `Smriti` affected ordering
-- Opt-out with a clear toggle; no telemetry implied
+- Provide a real `Smriti` Drishti for usage-memory entries
+- Opt out with `[smriti] enabled = false` or `VICAYA_NO_SMRITI=1`; no telemetry implied
 
 ### 9.3 `Suchi` + `Rakshaka` Health Surfacing
 
@@ -402,7 +403,6 @@ Next up (Phase 4):
 ### Phase 5 — Differentiators (Ongoing)
 
 - `Hetu` ranking explanations.
-- `Smriti` personalization.
 - `Sambandha` related view.
 - `Parivartana` changed-since view.
 - `Ankita` bookmarks/workspaces.

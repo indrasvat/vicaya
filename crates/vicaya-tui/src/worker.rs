@@ -4,6 +4,7 @@ use crate::client::{DaemonStatus, IpcClient};
 use crate::state::{Niyama, NiyamaType, StyledLine, StyledSegment, TextKind, TextStyle, ViewKind};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
+use vicaya_core::smriti::SmritiAction;
 use vicaya_index::SearchResult;
 
 use syntect::{
@@ -37,6 +38,14 @@ pub enum WorkerCommand {
     },
     Preview {
         id: u64,
+        path: String,
+    },
+    RecordSmriti {
+        path: String,
+        query: String,
+        action: SmritiAction,
+    },
+    ForgetSmriti {
         path: String,
     },
     Quit,
@@ -114,6 +123,16 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     })
                 }
                 WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
+                WorkerCommand::RecordSmriti {
+                    path,
+                    query,
+                    action,
+                } => {
+                    let _ = search_client.record_smriti(&path, &query, action);
+                }
+                WorkerCommand::ForgetSmriti { path } => {
+                    let _ = search_client.smriti_forget(&path);
+                }
                 WorkerCommand::Quit => break 'worker,
             },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -143,6 +162,16 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                     })
                 }
                 WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
+                WorkerCommand::RecordSmriti {
+                    path,
+                    query,
+                    action,
+                } => {
+                    let _ = search_client.record_smriti(&path, &query, action);
+                }
+                WorkerCommand::ForgetSmriti { path } => {
+                    let _ = search_client.smriti_forget(&path);
+                }
                 WorkerCommand::Quit => break 'worker,
             }
         }
@@ -168,22 +197,46 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             // When query is empty, request recent files from daemon
             let recent_if_empty = trimmed.is_empty();
 
-            let mut results = match search_client.search(
-                &trimmed,
-                limit,
-                boost_scope,
-                filter_scope,
-                recent_if_empty,
-            ) {
-                Ok(r) => r,
-                Err(e) => {
-                    search_client.reconnect();
-                    let _ = evt_tx.send(WorkerEvent::SearchResults {
-                        id,
-                        results: Vec::new(),
-                        error: Some(format!("Search error: {}", e)),
-                    });
-                    continue;
+            let mut results = if view == ViewKind::Smriti {
+                match search_client.smriti_list(Some(&trimmed), limit, filter_scope) {
+                    Ok(entries) => entries
+                        .into_iter()
+                        .map(|entry| SearchResult {
+                            path: entry.path,
+                            name: entry.name,
+                            score: entry.total_count.min(100) as f32 / 100.0,
+                            size: 0,
+                            mtime: entry.last_used,
+                        })
+                        .collect(),
+                    Err(e) => {
+                        search_client.reconnect();
+                        let _ = evt_tx.send(WorkerEvent::SearchResults {
+                            id,
+                            results: Vec::new(),
+                            error: Some(format!("Smriti error: {}", e)),
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                match search_client.search(
+                    &trimmed,
+                    limit,
+                    boost_scope,
+                    filter_scope,
+                    recent_if_empty,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        search_client.reconnect();
+                        let _ = evt_tx.send(WorkerEvent::SearchResults {
+                            id,
+                            results: Vec::new(),
+                            error: Some(format!("Search error: {}", e)),
+                        });
+                        continue;
+                    }
                 }
             };
 

@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use vicaya_core::ipc::{Request, Response};
+use vicaya_core::smriti::SmritiStore;
 use vicaya_core::{Config, Result};
 use vicaya_index::{FileId, FileMeta, Query, QueryEngine};
 use vicaya_scanner::{IndexSnapshot, Scanner};
@@ -32,6 +33,8 @@ pub struct DaemonState {
     pub name_to_ids: std::collections::HashMap<String, Vec<FileId>>,
     pub recent_order: Vec<FileId>,
     pub recent_updates: Vec<FileId>,
+    pub smriti_file: PathBuf,
+    pub smriti: SmritiStore,
     pub inode_to_id: std::collections::HashMap<(u64, u64), FileId>,
     pub last_updated: i64,
     pub reconciling: bool,
@@ -127,6 +130,22 @@ impl DaemonState {
         let path_order = build_path_order(&snapshot);
         let name_to_ids = build_name_map(&snapshot);
         let recent_order = build_recent_order(&snapshot);
+        let smriti_file = smriti_file_for_index(&index_file);
+        let smriti = if config.smriti_enabled() {
+            match SmritiStore::load(&smriti_file) {
+                Ok(store) => store,
+                Err(err) => {
+                    warn!(
+                        "Failed to load Smriti usage memory from {}: {}",
+                        smriti_file.display(),
+                        err
+                    );
+                    SmritiStore::default()
+                }
+            }
+        } else {
+            SmritiStore::default()
+        };
         let inode_to_id = build_inode_map(&snapshot);
         let last_updated = index_file
             .metadata()
@@ -149,6 +168,8 @@ impl DaemonState {
             name_to_ids,
             recent_order,
             recent_updates: Vec::new(),
+            smriti_file,
+            smriti,
             inode_to_id,
             last_updated,
             reconciling: false,
@@ -757,6 +778,46 @@ fn now_epoch_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+fn smriti_file_for_index(index_file: &Path) -> PathBuf {
+    let Some(parent) = index_file.parent() else {
+        return vicaya_core::paths::smriti_path();
+    };
+    if parent.file_name().is_some_and(|name| name == "index") {
+        return parent
+            .parent()
+            .map(|state_dir| state_dir.join("smriti.json"))
+            .unwrap_or_else(|| parent.join("smriti.json"));
+    }
+    parent.join("smriti.json")
+}
+
+fn apply_smriti_boosts(
+    state: &DaemonState,
+    results: &mut Vec<vicaya_index::SearchResult>,
+    limit: usize,
+) {
+    if !state.config.smriti_enabled() || results.is_empty() {
+        results.truncate(limit);
+        return;
+    }
+
+    let now = now_epoch_seconds();
+    let max_boost = state.config.smriti.max_boost;
+    for result in results.iter_mut() {
+        result.score =
+            (result.score + state.smriti.boost_for_path(&result.path, now, max_boost)).min(1.0);
+    }
+
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.mtime.cmp(&a.mtime))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    results.truncate(limit);
+}
+
 fn hash_map_allocated_bytes<K, V>(map: &std::collections::HashMap<K, V>) -> usize {
     // `HashMap` allocates a contiguous bucket array plus a control byte array.
     // We approximate control bytes as 1 byte per bucket (hashbrown SwissTable style).
@@ -1196,9 +1257,18 @@ impl IpcHandler {
                         ids
                     }
                 });
+                let trimmed_query_is_empty = query.trim().is_empty();
+                let search_limit = if state.config.smriti_enabled() && !trimmed_query_is_empty {
+                    limit
+                        .saturating_mul(4)
+                        .max(limit)
+                        .min(limit.saturating_add(300))
+                } else {
+                    limit
+                };
 
                 // If query is empty and recent_if_empty is true, return recent files
-                let results = if query.trim().is_empty() && recent_if_empty {
+                let mut results = if trimmed_query_is_empty && recent_if_empty {
                     if let Some((file_ids, true)) = scoped_file_ids.as_ref() {
                         engine.recent_file_ids(limit, file_ids)
                     } else {
@@ -1208,11 +1278,11 @@ impl IpcHandler {
                         engine.recent_file_ids(limit, &file_ids)
                     }
                 } else if let Some(file_ids) = exact_name_file_ids.as_deref() {
-                    engine.exact_name_file_ids(limit, file_ids)
+                    engine.exact_name_file_ids(search_limit, file_ids)
                 } else if let Some((file_ids, true)) = scoped_file_ids.as_ref() {
                     let query_obj = Query {
                         term: query,
-                        limit,
+                        limit: search_limit,
                         scope: scope_path,
                         filter_scope: filter_scope_path,
                     };
@@ -1220,12 +1290,15 @@ impl IpcHandler {
                 } else {
                     let query_obj = Query {
                         term: query,
-                        limit,
+                        limit: search_limit,
                         scope: scope_path,
                         filter_scope: filter_scope_path,
                     };
                     engine.search(&query_obj)
                 };
+                if !trimmed_query_is_empty {
+                    apply_smriti_boosts(&state, &mut results, limit);
+                }
 
                 let ipc_results = results
                     .into_iter()
@@ -1286,6 +1359,73 @@ impl IpcHandler {
                     },
                 }
             }
+            Request::SmritiRecord {
+                path,
+                query,
+                action,
+            } => {
+                let mut state = self.state.write().unwrap();
+                if !state.config.smriti_enabled() {
+                    return Response::Ok;
+                }
+                let now = now_epoch_seconds();
+                state.smriti.record(path, query, action, now);
+                let max_entries = state.config.smriti.max_entries;
+                state.smriti.prune_to_limit(max_entries);
+                match state.smriti.save_atomic(&state.smriti_file) {
+                    Ok(()) => Response::Ok,
+                    Err(e) => Response::Error {
+                        message: format!("Failed to save Smriti usage memory: {}", e),
+                    },
+                }
+            }
+            Request::SmritiList {
+                query,
+                limit,
+                filter_scope,
+            } => {
+                let state = self.state.read().unwrap();
+                if !state.config.smriti_enabled() {
+                    return Response::SmritiEntries {
+                        entries: Vec::new(),
+                    };
+                }
+                let scope = filter_scope
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(Path::new);
+                let entries =
+                    state
+                        .smriti
+                        .list(query.as_deref(), limit, scope, now_epoch_seconds());
+                Response::SmritiEntries { entries }
+            }
+            Request::SmritiForget { path } => {
+                let mut state = self.state.write().unwrap();
+                if !state.config.smriti_enabled() {
+                    return Response::Ok;
+                }
+                state.smriti.forget(&path);
+                match state.smriti.save_atomic(&state.smriti_file) {
+                    Ok(()) => Response::Ok,
+                    Err(e) => Response::Error {
+                        message: format!("Failed to save Smriti usage memory: {}", e),
+                    },
+                }
+            }
+            Request::SmritiClear => {
+                let mut state = self.state.write().unwrap();
+                if !state.config.smriti_enabled() {
+                    return Response::Ok;
+                }
+                state.smriti.clear();
+                match state.smriti.save_atomic(&state.smriti_file) {
+                    Ok(()) => Response::Ok,
+                    Err(e) => Response::Error {
+                        message: format!("Failed to save Smriti usage memory: {}", e),
+                    },
+                }
+            }
             Request::Shutdown => {
                 info!("Shutdown requested");
                 self.shutdown.store(true, Ordering::Relaxed);
@@ -1329,7 +1469,7 @@ impl Drop for IpcServer {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use vicaya_core::config::PerformanceConfig;
+    use vicaya_core::config::{PerformanceConfig, SmritiConfig};
     use vicaya_scanner::Scanner;
 
     fn test_config(root: &Path, vicaya_dir: &Path) -> Config {
@@ -1343,6 +1483,7 @@ mod tests {
                 scanner_threads: 2,
                 reconcile_hour: 3,
             },
+            smriti: SmritiConfig::default(),
         }
     }
 
@@ -1629,6 +1770,80 @@ mod tests {
             Response::Ok
         ));
         assert!(shutdown.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn smriti_recording_boosts_matching_search_results_and_lists_history() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let preferred = root.path().join("old").join("config.toml");
+        let newer = root.path().join("new").join("config.toml");
+        std::fs::create_dir_all(preferred.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(newer.parent().unwrap()).unwrap();
+        std::fs::write(&preferred, "[package]\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::fs::write(&newer, "[package]\n").unwrap();
+
+        let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let journal_lock = Arc::new(Mutex::new(()));
+        let rebuild_lock = Arc::new(Mutex::new(()));
+        let socket = vicaya_dir.path().join("daemon.sock");
+        let server =
+            IpcServer::new(&socket, state, shutdown.clone(), journal_lock, rebuild_lock).unwrap();
+
+        assert!(matches!(
+            server.handle_request(Request::SmritiRecord {
+                path: preferred.to_string_lossy().to_string(),
+                query: "config".to_string(),
+                action: vicaya_core::smriti::SmritiAction::Open,
+            }),
+            Response::Ok
+        ));
+
+        match server.handle_request(Request::Search {
+            query: "config".to_string(),
+            limit: 2,
+            scope: Some(root.path().to_string_lossy().to_string()),
+            filter_scope: Some(root.path().to_string_lossy().to_string()),
+            recent_if_empty: false,
+        }) {
+            Response::SearchResults { results } => {
+                assert_eq!(
+                    results.first().map(|r| r.path.as_str()),
+                    Some(preferred.to_string_lossy().as_ref())
+                );
+            }
+            other => panic!("unexpected search response: {other:?}"),
+        }
+
+        match server.handle_request(Request::SmritiList {
+            query: Some("config".to_string()),
+            limit: 10,
+            filter_scope: Some(root.path().to_string_lossy().to_string()),
+        }) {
+            Response::SmritiEntries { entries } => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].path, preferred.to_string_lossy());
+                assert_eq!(entries[0].total_count, 1);
+            }
+            other => panic!("unexpected smriti list response: {other:?}"),
+        }
+
+        assert!(matches!(
+            server.handle_request(Request::SmritiForget {
+                path: preferred.to_string_lossy().to_string(),
+            }),
+            Response::Ok
+        ));
+        match server.handle_request(Request::SmritiList {
+            query: None,
+            limit: 10,
+            filter_scope: None,
+        }) {
+            Response::SmritiEntries { entries } => assert!(entries.is_empty()),
+            other => panic!("unexpected smriti list response: {other:?}"),
+        }
     }
 
     #[test]

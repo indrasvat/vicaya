@@ -15,6 +15,7 @@ vicaya is a lightweight developer file finder inspired by "Everything" on Window
 - **Live Updates**: FSEvents-based file watcher keeps index up-to-date
 - **Repo-Aware Indexing**: Honors `.gitignore`, `.ignore`, and `.git/info/exclude` by default
 - **Developer Ranking**: Prefers exact/prefix/abbreviation matches and demotes noisy dependency/cache paths
+- **Smriti Frecency**: Learns local usage from opens/copies/reveals/prints to promote the paths you repeatedly choose
 - **Composable Output**: Table, plain, and JSON formats for shells, `fzf`, scripts, and agents
 - **Compact Index**: Efficient string arena + trigram index persisted to disk
 - **CLI, Daemon & TUI**: Command-line tools, always-on daemon, and terminal UI for instant results
@@ -145,6 +146,12 @@ vicaya metrics bench --queries /tmp/vicaya-bench-queries.txt --warmup 50 --runs 
 vicaya search "config" --format json
 vicaya search "test" --format plain
 
+# Inspect or reset local Smriti usage memory
+vicaya smriti list --limit 20
+vicaya smriti list config --scope ~/code/github.com/example-repo --format json
+vicaya smriti forget ~/code/github.com/example-repo/Cargo.toml
+vicaya smriti clear --yes
+
 # Manage the daemon manually
 vicaya daemon start
 vicaya daemon status
@@ -166,7 +173,7 @@ The TUI connects to the same daemon and gives you instant, fuzzy-as-you-type res
 Highlights:
 
 - Split view: `phala` (results) + `purvadarshana` (preview with syntax highlighting)
-- `Ctrl+T` opens the searchable `drishti` switcher (Patra = Files, Sthana = Directories)
+- `Ctrl+T` opens the searchable `drishti` switcher (Patra = Files, Sthana = Directories, Smriti = usage memory)
 - `Enter` on a directory pushes `ksetra` scope; `h` pops scope (breadcrumbs in header)
 - Launch with `vicaya-tui .` or `vicaya-tui /some/dir` to start with `ksetra` already applied
 - `Niyama` filters in `prashna`: `type:file|dir`, `ext:rs,md`, `path:src/`, `mtime:<7d`, `size:>10mb`
@@ -174,6 +181,7 @@ Highlights:
 - `Ctrl+O` toggles `purvadarshana`; `Tab` / `Shift+Tab` cycles focus (input/results/preview)
 - Preview: scroll with `j/k`, arrows, `PgUp/PgDn`, `Ctrl+U/Ctrl+D`, `g/G`; search with `/`, jump `n/N`, toggle line numbers `Ctrl+N`, clear `Ctrl+L`
 - Actions (in `phala`): `Enter/o` open in `$EDITOR` (or enter scope on dirs), `y` copy path, `p` print path and exit, `r` reveal in file manager
+- Smriti records accepted open/copy/reveal/print/scope actions locally and uses a bounded frecency boost for future matching searches
 - Press `?` for in-app help (when not focused on `prashna`)
 
 Terminology note: the UI uses romanized Sanskrit labels (e.g. `drishti`, `ksetra`, `prashna`, `phala`, `purvadarshana`). See `docs/vicaya-tui-plan.md` for the glossary and longer-term roadmap.
@@ -198,6 +206,7 @@ By default, vicaya stores state under `~/Library/Application Support/vicaya`:
 - `config.toml` (configuration)
 - `daemon.sock` / `daemon.pid` (daemon IPC + lifecycle)
 - `index/index.bin` / `index/index.journal` (snapshot + incremental updates)
+- `smriti.json` (local usage memory for frecency ranking)
 
 Use `VICAYA_DIR=/path/to/dir` to override the base directory (useful for tests and multi-instance setups).
 
@@ -206,6 +215,11 @@ and `.git/info/exclude` during indexing; toggle it in `config.toml` only when yo
 want ignored build artifacts or generated files to appear in results. Because
 this changes index membership, restart the daemon and run `vicaya rebuild` after
 changing it.
+
+`[smriti] enabled = true` is the default. Smriti never indexes file contents or
+sends usage data anywhere; it only stores local path/action counters in
+`smriti.json`. Set `VICAYA_NO_SMRITI=1` or disable `[smriti] enabled` when you
+want searches to ignore usage memory entirely.
 
 ## Make Targets Reference
 

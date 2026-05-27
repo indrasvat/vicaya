@@ -74,6 +74,12 @@ enum Commands {
     /// Show runtime metrics (process, vmmap, index)
     Metrics(metrics::MetricsArgs),
 
+    /// Inspect or clear Smriti usage memory
+    Smriti {
+        #[command(subcommand)]
+        action: SmritiActionCli,
+    },
+
     /// Upgrade vicaya to the latest GitHub release
     Upgrade(upgrade::UpgradeArgs),
 
@@ -95,6 +101,38 @@ enum DaemonAction {
     Stop,
     /// Check daemon status
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum SmritiActionCli {
+    /// List learned recent/frequent paths
+    List {
+        /// Optional query filter
+        query: Option<String>,
+
+        /// Maximum number of entries
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Output format (table, json, plain)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+
+        /// Restrict entries to this directory subtree
+        #[arg(long, value_name = "DIR")]
+        scope: Option<PathBuf>,
+    },
+    /// Forget one path from Smriti
+    Forget {
+        /// Path to forget
+        path: PathBuf,
+    },
+    /// Clear all Smriti usage memory
+    Clear {
+        /// Confirm clearing without prompting
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -135,6 +173,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Metrics(args)) => {
             metrics::run(args)?;
+        }
+        Some(Commands::Smriti { action }) => {
+            smriti_command(action)?;
         }
         Some(Commands::Upgrade(args)) | Some(Commands::Update(args)) => {
             if let Err(err) = upgrade::run(args) {
@@ -585,6 +626,88 @@ fn status(format: &str) -> Result<()> {
     }
 }
 
+fn smriti_command(action: SmritiActionCli) -> Result<()> {
+    if !vicaya_core::daemon::is_running() {
+        println!("Daemon is not running. Starting daemon...");
+        let pid = vicaya_core::daemon::start_daemon()?;
+        println!("✓ Daemon started (PID: {})", pid);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    match action {
+        SmritiActionCli::List {
+            query,
+            limit,
+            format,
+            scope,
+        } => {
+            let filter_scope = scope
+                .as_deref()
+                .map(vicaya_core::paths::resolve_scope_dir)
+                .transpose()?
+                .map(|p| p.to_string_lossy().to_string());
+            let request = Request::SmritiList {
+                query,
+                limit,
+                filter_scope,
+            };
+            let response = IpcClient::connect()?.request(&request)?;
+            match response {
+                Response::SmritiEntries { entries } => match format.as_str() {
+                    "json" => println!("{}", serde_json::to_string_pretty(&entries).unwrap()),
+                    "plain" => {
+                        for entry in entries {
+                            println!("{}", entry.path);
+                        }
+                    }
+                    _ => {
+                        println!("{:<6} {:<8} {:<20} PATH", "RANK", "COUNT", "LAST USED");
+                        for (idx, entry) in entries.iter().enumerate() {
+                            let last_used = chrono::DateTime::from_timestamp(entry.last_used, 0)
+                                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                                .unwrap_or_default();
+                            println!(
+                                "{:<6} {:<8} {:<20} {}",
+                                idx + 1,
+                                entry.total_count,
+                                last_used,
+                                entry.path
+                            );
+                        }
+                    }
+                },
+                Response::Error { message } => eprintln!("Error: {}", message),
+                _ => eprintln!("Unexpected response from daemon"),
+            }
+        }
+        SmritiActionCli::Forget { path } => {
+            let path = vicaya_core::paths::expand_user_path(&path);
+            let request = Request::SmritiForget {
+                path: path.to_string_lossy().to_string(),
+            };
+            match IpcClient::connect()?.request(&request)? {
+                Response::Ok => println!("Forgot Smriti entry: {}", path.display()),
+                Response::Error { message } => eprintln!("Error: {}", message),
+                _ => eprintln!("Unexpected response from daemon"),
+            }
+        }
+        SmritiActionCli::Clear { yes } => {
+            if !yes {
+                return Err(vicaya_core::Error::Other(
+                    "Refusing to clear Smriti without --yes".to_string(),
+                ));
+            }
+            match IpcClient::connect()?.request(&Request::SmritiClear)? {
+                Response::Ok => println!("Smriti cleared"),
+                Response::Error { message } => eprintln!("Error: {}", message),
+                _ => eprintln!("Unexpected response from daemon"),
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn format_number(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::new();
@@ -891,6 +1014,47 @@ mod tests {
         assert!(matches!(
             update.command,
             Some(Commands::Update(upgrade::UpgradeArgs { force: true, .. }))
+        ));
+    }
+
+    #[test]
+    fn cli_parses_smriti_subcommands() {
+        let list = Cli::parse_from([
+            "vicaya", "smriti", "list", "config", "--limit", "7", "--format", "json", "--scope",
+            ".",
+        ]);
+        match list.command {
+            Some(Commands::Smriti {
+                action:
+                    SmritiActionCli::List {
+                        query,
+                        limit,
+                        format,
+                        scope,
+                    },
+            }) => {
+                assert_eq!(query.as_deref(), Some("config"));
+                assert_eq!(limit, 7);
+                assert_eq!(format, "json");
+                assert_eq!(scope, Some(PathBuf::from(".")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let forget = Cli::parse_from(["vicaya", "smriti", "forget", "Cargo.toml"]);
+        match forget.command {
+            Some(Commands::Smriti {
+                action: SmritiActionCli::Forget { path },
+            }) => assert_eq!(path, PathBuf::from("Cargo.toml")),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let clear = Cli::parse_from(["vicaya", "smriti", "clear", "--yes"]);
+        assert!(matches!(
+            clear.command,
+            Some(Commands::Smriti {
+                action: SmritiActionCli::Clear { yes: true }
+            })
         ));
     }
 
