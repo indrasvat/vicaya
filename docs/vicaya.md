@@ -34,7 +34,7 @@ Note: This document began as an implementation plan; many checklists and timelin
 
 ### What We're Building
 
-vicaya (विचय) is a macOS developer file finder that locates files and folders by filename, path, and basic metadata *instantly*, with interactive results as you type. It mirrors the "Everything for Windows" experience but is terminal-native, Rust-powered, and designed to complement content search tools like `ripgrep`.
+vicaya (विचय) is a macOS developer file finder that locates files and folders by filename, path, and basic metadata *instantly*, with interactive results as you type. It mirrors the "Everything for Windows" experience but is terminal-native, Rust-powered, and can hand scoped content queries to local grep-class tools.
 
 ### Key Deliverables
 
@@ -49,6 +49,7 @@ vicaya (विचय) is a macOS developer file finder that locates files and fo
 - [x] **Search Frontends**
   - [x] CLI search tool (`vicaya`): instant results, filters, scripting-friendly.
   - [x] Terminal UI (`vicaya-tui`): interactive search-as-you-type.
+  - [x] Scoped content search (`vicaya grep`, `Antarvicaya` TUI drishti) via `rg` / `git grep` / explicit slow `grep`.
   - [ ] macOS menu-bar / quick-switch UI with global hotkey and result list.
 - [x] **Config & Preferences**
   - Exclusion rules, per-volume settings, performance knobs.
@@ -75,8 +76,8 @@ vicaya (विचय) is a macOS developer file finder that locates files and fo
 ### Constraints & Non-Goals
 
 - **Platform**: macOS only (APFS/HFS+). No Windows/Linux support in v1.
-- **Scope**: *Filename / path search only* in v1.
-  - No file content indexing (may be future plugin).
+- **Scope**: indexed filename / path search stays the primary v1 path.
+  - File contents are not indexed; scoped content search shells out to local tools.
 - **Permissions**: Respects macOS TCC (Full Disk Access). No bypasses.
 - **Non-goals (v1)**:
   - Network search across multiple machines.
@@ -223,11 +224,20 @@ RANK  SCORE  MODIFIED            PATH
 $ vicaya search "query.rs" --scope ~/code/github.com/example-repo --limit 5
 RANK  SCORE  MODIFIED            PATH
 1     1.00   2026-03-11 10:21    /Users/alice/code/github.com/example-repo/src/query.rs
+
+$ vicaya grep "fn main" --scope ~/code/github.com/example-repo --limit 5
+Engine: ripgrep
+RANK   LINE       COL      MATCH
+1      12         4        /Users/alice/code/github.com/example-repo/src/main.rs:12 fn main() {
 ```
 
 The shipped CLI now supports explicit subtree restriction via `--scope <DIR>`,
 while the TUI can be launched directly into a scope with `vicaya-tui .` or
-`vicaya-tui /some/dir`.
+`vicaya-tui /some/dir`. Content search is scoped and does not use the daemon:
+`engine = "auto"` prefers `rg`, then `git grep` inside a worktree. Plain
+recursive `grep` is available only by explicit request or slow-fallback config.
+Older `config.toml` files without `[content_search]` continue to load; the
+defaults are applied in memory rather than rewriting the file.
 
 ### State Transitions (High-Level)
 

@@ -1522,7 +1522,7 @@ impl Drop for IpcServer {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use vicaya_core::config::{PerformanceConfig, SmritiConfig};
+    use vicaya_core::config::{ContentSearchConfig, PerformanceConfig, SmritiConfig};
     use vicaya_scanner::Scanner;
 
     fn test_config(root: &Path, vicaya_dir: &Path) -> Config {
@@ -1537,6 +1537,7 @@ mod tests {
                 reconcile_hour: 3,
             },
             smriti: SmritiConfig::default(),
+            content_search: ContentSearchConfig::default(),
         }
     }
 

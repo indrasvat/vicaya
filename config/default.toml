@@ -37,3 +37,13 @@ max_entries = 10000
 
 # Maximum score boost applied to matching search results
 max_boost = 0.08
+
+[content_search]
+# Powers `vicaya grep` and the Antarvicaya TUI drishti.
+enabled = true
+
+# auto prefers ripgrep, then git-grep inside a worktree.
+engine = "auto"
+
+# Keep this false unless you explicitly accept slower recursive grep fallback.
+allow_slow_fallback = false

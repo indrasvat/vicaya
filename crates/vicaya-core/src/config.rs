@@ -28,6 +28,10 @@ pub struct Config {
     /// Smriti usage-memory settings.
     #[serde(default)]
     pub smriti: SmritiConfig,
+
+    /// Content search settings.
+    #[serde(default)]
+    pub content_search: ContentSearchConfig,
 }
 
 /// Performance-related configuration.
@@ -54,6 +58,37 @@ pub struct SmritiConfig {
     /// Maximum ranking boost applied to matching search results.
     #[serde(default = "default_smriti_max_boost")]
     pub max_boost: f32,
+}
+
+/// Content-search configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentSearchConfig {
+    /// Whether content search is enabled.
+    #[serde(default = "default_content_search_enabled")]
+    pub enabled: bool,
+
+    /// Engine preference: auto, ripgrep, git-grep, or grep.
+    #[serde(default = "default_content_search_engine")]
+    pub engine: String,
+
+    /// Allow recursive grep fallback when ripgrep and git-grep are unavailable.
+    #[serde(default)]
+    pub allow_slow_fallback: bool,
+
+    /// Optional explicit ripgrep binary path.
+    #[serde(default)]
+    pub rg_path: Option<PathBuf>,
+}
+
+impl Default for ContentSearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_content_search_enabled(),
+            engine: default_content_search_engine(),
+            allow_slow_fallback: false,
+            rg_path: None,
+        }
+    }
 }
 
 impl Default for SmritiConfig {
@@ -87,6 +122,7 @@ impl Default for Config {
                 reconcile_hour: 3,
             },
             smriti: SmritiConfig::default(),
+            content_search: ContentSearchConfig::default(),
         };
         config.normalize_exclusions();
         config
@@ -107,6 +143,14 @@ fn default_smriti_max_entries() -> usize {
 
 fn default_smriti_max_boost() -> f32 {
     0.08
+}
+
+fn default_content_search_enabled() -> bool {
+    true
+}
+
+fn default_content_search_engine() -> String {
+    "auto".to_string()
 }
 
 impl Config {
@@ -134,6 +178,10 @@ impl Config {
 
         // Expand in index_path
         self.index_path = Self::expand_path(&self.index_path);
+
+        if let Some(path) = self.content_search.rg_path.as_mut() {
+            *path = Self::expand_path(path);
+        }
     }
 
     fn normalize_exclusions(&mut self) {
@@ -177,6 +225,32 @@ impl Config {
     /// Whether Smriti is enabled after environment overrides.
     pub fn smriti_enabled(&self) -> bool {
         self.smriti.enabled && std::env::var_os("VICAYA_NO_SMRITI").is_none()
+    }
+
+    /// Whether content search is enabled after environment overrides.
+    pub fn content_search_enabled(&self) -> bool {
+        self.content_search.enabled && std::env::var_os("VICAYA_NO_CONTENT_SEARCH").is_none()
+    }
+
+    /// Configured content-search engine preference after environment overrides.
+    pub fn content_search_engine(
+        &self,
+    ) -> crate::Result<crate::content_search::ContentSearchEngineChoice> {
+        let engine = std::env::var("VICAYA_CONTENT_SEARCH_ENGINE")
+            .unwrap_or_else(|_| self.content_search.engine.clone());
+        crate::content_search::ContentSearchEngineChoice::parse(&engine)
+    }
+
+    /// Whether slow recursive grep fallback is allowed after environment overrides.
+    pub fn content_search_allow_slow_fallback(&self) -> bool {
+        if let Ok(value) = std::env::var("VICAYA_CONTENT_SEARCH_ALLOW_SLOW_FALLBACK") {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        } else {
+            self.content_search.allow_slow_fallback
+        }
     }
 }
 
@@ -254,11 +328,53 @@ reconcile_hour = 3
             PathBuf::from(format!("{home}/Projects"))
         );
         assert!(config.respect_ignore_files);
+        assert!(config.content_search_enabled());
+        assert_eq!(config.content_search.engine, "auto");
 
         // Verify tilde expansion in index_path
         assert_eq!(
             config.index_path,
             PathBuf::from(format!("{home}/Library/Application Support/vicaya"))
+        );
+    }
+
+    #[test]
+    fn test_content_search_config_expands_rg_path() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let home = env::var("HOME").unwrap();
+
+        let config_content = r#"
+index_roots = ["~/Documents"]
+exclusions = [".git"]
+index_path = "~/Library/Application Support/vicaya/index"
+max_memory_mb = 512
+
+[performance]
+scanner_threads = 4
+reconcile_hour = 3
+
+[content_search]
+enabled = true
+engine = "ripgrep"
+allow_slow_fallback = false
+rg_path = "~/bin/rg"
+"#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(config_content.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+
+        assert_eq!(
+            config.content_search.rg_path,
+            Some(PathBuf::from(format!("{home}/bin/rg")))
+        );
+        assert_eq!(
+            config.content_search_engine().unwrap(),
+            crate::content_search::ContentSearchEngineChoice::Ripgrep
         );
     }
 
@@ -322,6 +438,7 @@ enabled = false
                 reconcile_hour: 2,
             },
             smriti: SmritiConfig::default(),
+            content_search: ContentSearchConfig::default(),
         };
 
         // Save

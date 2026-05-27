@@ -65,13 +65,13 @@ sub-20ms query latency over millions of files.
 
 | Crate | Purpose | Binary? |
 |---|---|---|
-| `vicaya-core` | Config, logging, error types, IPC protocol, path utilities, filter rules | No (lib) |
+| `vicaya-core` | Config, logging, error types, IPC protocol, path utilities, filter rules, content-search engine selection | No (lib) |
 | `vicaya-index` | FileTable, StringArena, TrigramIndex, QueryEngine, AbbreviationMatcher | No (lib) |
 | `vicaya-scanner` | Filesystem walker (walkdir/rayon), builds `IndexSnapshot` | No (lib) |
 | `vicaya-watcher` | FSEvents wrapper (notify crate), emits `IndexUpdate` events | No (lib) |
 | `vicaya-daemon` | Background service: loads index, handles IPC, applies live updates | Yes |
-| `vicaya-cli` | CLI binary (`vicaya`): search, rebuild, daemon control, metrics | Yes |
-| `vicaya-tui` | Terminal UI (`vicaya-tui`): streaming search with preview pane | Yes |
+| `vicaya-cli` | CLI binary (`vicaya`): search, grep, rebuild, daemon control, metrics | Yes |
+| `vicaya-tui` | Terminal UI (`vicaya-tui`): streaming search/content drishtis with preview pane | Yes |
 
 ## Crate Dependencies
 
@@ -649,14 +649,14 @@ ones in the burst are discarded.
 
 The worker thread handles all I/O off the main thread:
 
-**Commands** (main → worker):
-- `Search { id, query, limit, view, boost_scope, filter_scope, niyamas }` — Execute search via daemon IPC
-- `Preview { id, path }` — Load and syntax-highlight file preview
+**Commands** (main -> worker):
+- `Search { id, query, limit, view, boost_scope, filter_scope, niyamas }` — Execute filename search via daemon IPC, Smriti search via daemon IPC, or scoped content search locally for `Antarvicaya`
+- `Preview { id, path, anchor_line }` — Load and syntax-highlight file preview, optionally centered near a content match
 - `Quit` — Shut down worker
 
-**Events** (worker → main):
+**Events** (worker -> main):
 - `SearchResults { id, results, error }` — Search completed
-- `PreviewReady { id, path, title, lines, truncated }` — Preview loaded
+- `PreviewReady { id, path, title, lines, truncated, anchor_line }` — Preview loaded
 - `Status { status }` — Periodic daemon status update
 
 Both search and preview use incrementing IDs so the main loop can discard
@@ -778,6 +778,18 @@ updates. The daily reconciliation resets the journal, bounding its size.
 - Trigrams are extracted only from basenames, keeping the index compact
 - `respect_ignore_files = false` disables repository ignore-file handling; this
   changes index membership and requires a rebuild
+
+### Content Search
+
+- Content search is deliberately not indexed. `vicaya grep` and the TUI
+  `Antarvicaya` drishti run scoped, local process searches through
+  `vicaya-core::content_search`.
+- Engine policy is fast first: `rg` when available, then `git grep` inside a git
+  worktree, then plain recursive `grep` only when requested or when
+  `[content_search] allow_slow_fallback = true`.
+- TUI rows encode `file:line:column` plus a compact snippet. The preview pane
+  jumps near the selected match and reuses the existing syntax-highlighted file
+  preview path.
 
 ### IPC
 

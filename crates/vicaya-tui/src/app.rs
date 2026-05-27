@@ -139,6 +139,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     title,
                     lines,
                     truncated,
+                    anchor_line,
                 } => {
                     if id == active_preview_id {
                         app.preview.is_loading = false;
@@ -148,6 +149,9 @@ fn run_app<B: ratatui::backend::Backend>(
                         app.preview.lines = lines;
                         app.preview.content_line_numbers =
                             crate::state::compute_content_line_numbers(&app.preview.lines);
+                        if let Some(line) = anchor_line {
+                            app.preview.scroll = preview_scroll_for_line(app, line);
+                        }
                     }
                 }
             }
@@ -214,10 +218,14 @@ fn run_app<B: ratatui::backend::Backend>(
         // Schedule preview for selected result (best-effort).
         if app.preview.is_visible && app.mode == AppMode::Search {
             if let Some(result) = app.search.selected_result() {
-                if last_preview_path.as_deref() != Some(result.path.as_str()) {
+                let anchor_line = content_result_anchor(app.view, result);
+                let preview_key = anchor_line
+                    .map(|line| format!("{}#{line}", result.path))
+                    .unwrap_or_else(|| result.path.clone());
+                if last_preview_path.as_deref() != Some(preview_key.as_str()) {
                     preview_id = preview_id.wrapping_add(1);
                     active_preview_id = preview_id;
-                    last_preview_path = Some(result.path.clone());
+                    last_preview_path = Some(preview_key);
                     app.preview.is_loading = true;
                     app.preview.truncated = false;
                     app.preview.path = Some(result.path.clone());
@@ -225,9 +233,16 @@ fn run_app<B: ratatui::backend::Backend>(
                     app.preview.lines.clear();
                     app.preview.content_line_numbers.clear();
                     app.preview.scroll = 0;
+                    if anchor_line.is_some() {
+                        app.preview.search_query =
+                            crate::state::parse_query(&app.search.query).term;
+                    } else if app.view != crate::state::ViewKind::Antarvicaya {
+                        app.preview.clear_search();
+                    }
                     let _ = cmd_tx.send(WorkerCommand::Preview {
                         id: active_preview_id,
                         path: result.path.clone(),
+                        anchor_line,
                     });
                 }
             } else if last_preview_path.is_some() {
@@ -260,6 +275,31 @@ fn run_app<B: ratatui::backend::Backend>(
     }
 
     Ok(())
+}
+
+fn content_result_anchor(
+    view: crate::state::ViewKind,
+    result: &vicaya_index::SearchResult,
+) -> Option<usize> {
+    if view != crate::state::ViewKind::Antarvicaya {
+        return None;
+    }
+
+    let file_name = std::path::Path::new(&result.path)
+        .file_name()
+        .and_then(|name| name.to_str())?;
+    let rest = result.name.strip_prefix(file_name)?.strip_prefix(':')?;
+    rest.split(':').next()?.parse().ok()
+}
+
+fn preview_scroll_for_line(app: &AppState, line: usize) -> u16 {
+    let target = app
+        .preview
+        .content_line_numbers
+        .iter()
+        .position(|number| *number == Some(line))
+        .unwrap_or(0);
+    target.saturating_sub(3) as u16
 }
 
 /// Handle keyboard events
@@ -1290,6 +1330,41 @@ mod tests {
         handle_key_event(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
         assert_eq!(app.print_on_exit, Some(file.to_string_lossy().to_string()));
         assert!(app.should_quit());
+    }
+
+    #[test]
+    fn content_result_anchor_parses_line_from_result_name() {
+        let result = SearchResult {
+            path: "/tmp/project/src/main.rs".to_string(),
+            name: "main.rs:42:7  fn main() {}".to_string(),
+            score: 1.0,
+            size: 0,
+            mtime: 0,
+        };
+
+        assert_eq!(
+            content_result_anchor(ViewKind::Antarvicaya, &result),
+            Some(42)
+        );
+        assert_eq!(content_result_anchor(ViewKind::Patra, &result), None);
+    }
+
+    #[test]
+    fn preview_scroll_for_line_keeps_match_near_top() {
+        let mut app = AppState::new();
+        app.preview.lines = vec![
+            meta_line("/tmp/file.rs"),
+            meta_line("10 bytes"),
+            meta_line(""),
+            plain_line("one"),
+            plain_line("two"),
+            plain_line("three"),
+            plain_line("four"),
+        ];
+        app.preview.content_line_numbers =
+            crate::state::compute_content_line_numbers(&app.preview.lines);
+
+        assert_eq!(preview_scroll_for_line(&app, 4), 3);
     }
 
     #[test]

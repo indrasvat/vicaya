@@ -94,6 +94,7 @@ fn cli_search_returns_json_results() {
             reconcile_hour: 3,
         },
         smriti: vicaya_core::config::SmritiConfig::default(),
+        content_search: vicaya_core::config::ContentSearchConfig::default(),
     };
 
     std::fs::create_dir_all(vicaya_dir.path()).unwrap();

@@ -4,6 +4,7 @@ use crate::client::{DaemonStatus, IpcClient};
 use crate::state::{Niyama, NiyamaType, StyledLine, StyledSegment, TextKind, TextStyle, ViewKind};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
+use vicaya_core::content_search::{ContentSearchOptions, ContentSearchReport};
 use vicaya_core::smriti::SmritiAction;
 use vicaya_index::SearchResult;
 
@@ -39,6 +40,7 @@ pub enum WorkerCommand {
     Preview {
         id: u64,
         path: String,
+        anchor_line: Option<usize>,
     },
     RecordSmriti {
         path: String,
@@ -63,6 +65,7 @@ pub enum WorkerEvent {
         title: String,
         lines: Vec<StyledLine>,
         truncated: bool,
+        anchor_line: Option<usize>,
     },
     Status {
         status: Option<DaemonStatus>,
@@ -97,7 +100,7 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
     }
 
     let mut pending_search: Option<PendingSearch> = None;
-    let mut pending_preview: Option<(u64, String)> = None;
+    let mut pending_preview: Option<(u64, String, Option<usize>)> = None;
 
     'worker: loop {
         // Receive at least one command, but wake periodically for status.
@@ -122,7 +125,11 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                         niyamas,
                     })
                 }
-                WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
+                WorkerCommand::Preview {
+                    id,
+                    path,
+                    anchor_line,
+                } => pending_preview = Some((id, path, anchor_line)),
                 WorkerCommand::RecordSmriti {
                     path,
                     query,
@@ -161,7 +168,11 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                         niyamas,
                     })
                 }
-                WorkerCommand::Preview { id, path } => pending_preview = Some((id, path)),
+                WorkerCommand::Preview {
+                    id,
+                    path,
+                    anchor_line,
+                } => pending_preview = Some((id, path, anchor_line)),
                 WorkerCommand::RecordSmriti {
                     path,
                     query,
@@ -219,6 +230,18 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                         continue;
                     }
                 }
+            } else if view == ViewKind::Antarvicaya {
+                match content_search_results(&trimmed, limit, filter_scope.or(boost_scope)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = evt_tx.send(WorkerEvent::SearchResults {
+                            id,
+                            results: Vec::new(),
+                            error: Some(format!("Content search error: {}", e)),
+                        });
+                        continue;
+                    }
+                }
             } else {
                 match search_client.search(
                     &trimmed,
@@ -250,7 +273,7 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
             });
         }
 
-        if let Some((id, path)) = pending_preview.take() {
+        if let Some((id, path, anchor_line)) = pending_preview.take() {
             let (title, lines, truncated, error) = build_preview(&path, &syntaxes, theme);
             let _ = evt_tx.send(WorkerEvent::PreviewReady {
                 id,
@@ -258,6 +281,7 @@ fn worker_loop(cmd_rx: Receiver<WorkerCommand>, evt_tx: Sender<WorkerEvent>) {
                 title,
                 lines,
                 truncated,
+                anchor_line,
             });
             if let Some(error) = error {
                 tracing::debug!("Preview error: {}", error);
@@ -383,6 +407,88 @@ fn matches_filters(
     }
 
     true
+}
+
+fn content_search_results(
+    query: &str,
+    limit: usize,
+    scope: Option<&std::path::Path>,
+) -> anyhow::Result<Vec<SearchResult>> {
+    let config = load_config_for_worker()?;
+    if !config.content_search_enabled() {
+        anyhow::bail!("content search is disabled");
+    }
+
+    let scope = scope
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(std::env::current_dir()?);
+    let mut options = ContentSearchOptions::new(query, scope, limit);
+    options.engine = config.content_search_engine()?;
+    options.allow_slow_fallback = config.content_search_allow_slow_fallback();
+    options.rg_path = config.content_search.rg_path.clone();
+
+    let report = vicaya_core::content_search::search(&options)?;
+    Ok(report_to_search_results(report, limit))
+}
+
+fn load_config_for_worker() -> anyhow::Result<vicaya_core::Config> {
+    let config_path = vicaya_core::paths::config_path();
+    if config_path.exists() {
+        Ok(vicaya_core::Config::load(&config_path)?)
+    } else {
+        Ok(vicaya_core::Config::default())
+    }
+}
+
+fn report_to_search_results(report: ContentSearchReport, limit: usize) -> Vec<SearchResult> {
+    let total = report.hits.len().max(1) as f32;
+    report
+        .hits
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .map(|(idx, hit)| {
+            let meta = std::fs::metadata(&hit.path).ok();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime = meta
+                .and_then(|m| m.modified().ok())
+                .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(0);
+            let file_name = hit
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_else(|| hit.path.to_str().unwrap_or("(match)"));
+            let column = hit.column.unwrap_or(1);
+            let snippet = truncate_snippet(&hit.line, 96);
+
+            SearchResult {
+                path: hit.path.to_string_lossy().to_string(),
+                name: format!("{}:{}:{}  {}", file_name, hit.line_number, column, snippet),
+                score: (1.0 - (idx as f32 / total) * 0.25).max(0.01),
+                size,
+                mtime,
+            }
+        })
+        .collect()
+}
+
+fn truncate_snippet(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    let mut out = String::new();
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        if ch.is_control() {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn pick_theme(themes: &ThemeSet) -> &Theme {
@@ -763,6 +869,29 @@ mod tests {
             Some(dir.path()),
             &ext_rs
         ));
+    }
+
+    #[test]
+    fn content_report_maps_hits_to_tui_rows() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("main.rs");
+        std::fs::write(&file_path, "fn main() {}\n").unwrap();
+
+        let report = ContentSearchReport {
+            engine: vicaya_core::content_search::ContentSearchEngine::Ripgrep,
+            hits: vec![vicaya_core::content_search::ContentSearchHit {
+                path: file_path.clone(),
+                line_number: 1,
+                column: Some(4),
+                line: "fn main() {}".to_string(),
+            }],
+        };
+
+        let results = report_to_search_results(report, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, file_path.to_string_lossy());
+        assert_eq!(results[0].name, "main.rs:1:4  fn main() {}");
+        assert_eq!(results[0].size, 13);
     }
 
     #[test]
@@ -1158,6 +1287,7 @@ mod tests {
             .send(WorkerCommand::Preview {
                 id: 9,
                 path: preview_file.to_string_lossy().to_string(),
+                anchor_line: None,
             })
             .unwrap();
 

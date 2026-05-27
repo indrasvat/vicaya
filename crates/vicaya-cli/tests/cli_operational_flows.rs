@@ -71,6 +71,7 @@ fn write_config(vicaya_dir: &Path, root: &Path) {
             reconcile_hour: 3,
         },
         smriti: vicaya_core::config::SmritiConfig::default(),
+        content_search: vicaya_core::config::ContentSearchConfig::default(),
     };
     std::fs::create_dir_all(vicaya_dir).unwrap();
     config.save(&vicaya_dir.join("config.toml")).unwrap();
@@ -121,6 +122,79 @@ fn wait_for_status_json(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+#[test]
+fn grep_command_searches_contents_without_daemon() {
+    let vicaya_bin = PathBuf::from(env!("CARGO_BIN_EXE_vicaya"));
+    let vicaya_dir = tempfile::tempdir().unwrap();
+    let corpus = tempfile::tempdir().unwrap();
+    let file = corpus.path().join("src/main.rs");
+    write_file(&file, "fn main() {\n    println!(\"needle\");\n}\n");
+
+    let output = Command::new(&vicaya_bin)
+        .env("VICAYA_DIR", vicaya_dir.path())
+        .env("VICAYA_NO_UPDATE_CHECK", "1")
+        .args([
+            "grep",
+            "needle",
+            "--scope",
+            corpus.path().to_str().unwrap(),
+            "--engine",
+            "grep",
+            "--allow-slow-fallback",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "vicaya grep failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["engine"], "grep");
+    assert_eq!(
+        json["hits"][0]["path"].as_str(),
+        Some(file.to_string_lossy().as_ref())
+    );
+    assert_eq!(json["hits"][0]["line_number"], 2);
+
+    let other = corpus.path().join("src/other.rs");
+    write_file(&other, "needle outside file scope\n");
+    let file_scope = Command::new(&vicaya_bin)
+        .env("VICAYA_DIR", vicaya_dir.path())
+        .env("VICAYA_NO_UPDATE_CHECK", "1")
+        .args([
+            "grep",
+            "needle",
+            "--scope",
+            file.to_str().unwrap(),
+            "--engine",
+            "grep",
+            "--allow-slow-fallback",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        file_scope.status.success(),
+        "vicaya grep file scope failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&file_scope.stdout),
+        String::from_utf8_lossy(&file_scope.stderr)
+    );
+    let file_json: serde_json::Value = serde_json::from_slice(&file_scope.stdout).unwrap();
+    assert_eq!(file_json["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        file_json["hits"][0]["path"].as_str(),
+        Some(file.to_string_lossy().as_ref())
+    );
 }
 
 #[test]
