@@ -38,6 +38,8 @@ pub struct DaemonState {
     pub inode_to_id: std::collections::HashMap<(u64, u64), FileId>,
     pub last_updated: i64,
     pub reconciling: bool,
+    #[cfg(test)]
+    retirement_probe: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +175,8 @@ impl DaemonState {
             inode_to_id,
             last_updated,
             reconciling: false,
+            #[cfg(test)]
+            retirement_probe: None,
         }
     }
 
@@ -1030,10 +1034,56 @@ fn replace_state(state: &SharedState, mut rebuilt: DaemonState) {
     };
 
     // Dropping a multi-GB old state can monopolize allocator locks and stall
-    // foreground IPC threads even though the daemon state lock has been
-    // released. Rebuilds are rare; keep the retired state until process exit so
-    // status/search stay responsive through reconcile completion.
-    std::mem::forget(old_state);
+    // foreground IPC threads. Retire it outside the shared-state lock so
+    // status/search stay responsive while the allocator reclaims memory.
+    retire_state(old_state);
+}
+
+fn retire_state(old_state: DaemonState) {
+    let spawn_result = std::thread::Builder::new()
+        .name("vicaya-retired-state-drop".to_string())
+        .spawn(move || {
+            #[cfg(test)]
+            let retirement_probe = old_state.retirement_probe.clone();
+            drop(old_state);
+            let released = relieve_malloc_pressure();
+            if released > 0 {
+                debug!(
+                    "Released {} bytes from malloc after state retirement",
+                    released
+                );
+            }
+            #[cfg(test)]
+            if let Some(probe) = retirement_probe {
+                probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+
+    if let Err(err) = spawn_result {
+        // If thread creation fails, Rust drops the closure and its captured
+        // state before returning. The daemon can continue; the only lost
+        // behavior is asynchronous retirement.
+        warn!("Failed to retire old daemon state asynchronously: {}", err);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn relieve_malloc_pressure() -> usize {
+    extern "C" {
+        fn malloc_zone_pressure_relief(
+            zone: *mut libc::malloc_zone_t,
+            goal: libc::size_t,
+        ) -> libc::size_t;
+    }
+
+    // Passing a null zone asks malloc to inspect all zones; a zero goal requests
+    // maximal relief. This is best-effort and may legitimately release 0 bytes.
+    unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) as usize }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn relieve_malloc_pressure() -> usize {
+    0
 }
 
 pub fn full_rebuild_from_disk(
@@ -1553,6 +1603,22 @@ mod tests {
         )
     }
 
+    fn retirement_probe() -> Arc<std::sync::atomic::AtomicUsize> {
+        Arc::new(std::sync::atomic::AtomicUsize::new(0))
+    }
+
+    fn wait_for_retired_state_drop(probe: &std::sync::atomic::AtomicUsize, after: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if probe.load(std::sync::atomic::Ordering::SeqCst) > after {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        panic!("retired daemon state was not dropped");
+    }
+
     #[test]
     fn smriti_boosts_preserve_engine_order_without_memory() {
         let vicaya_dir = tempdir().unwrap();
@@ -1805,6 +1871,9 @@ mod tests {
 
         let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
         state.write().unwrap().last_updated = 0;
+        let retirement_probe = retirement_probe();
+        state.write().unwrap().retirement_probe = Some(Arc::clone(&retirement_probe));
+        let retired_before = retirement_probe.load(std::sync::atomic::Ordering::SeqCst);
 
         let files_indexed =
             full_rebuild_from_disk(&state, &Arc::new(Mutex::new(())), &Arc::new(Mutex::new(())))
@@ -1814,6 +1883,24 @@ mod tests {
         let state = state.read().unwrap();
         assert!(state.last_updated > 0);
         assert!(!state.reconciling);
+        drop(state);
+        wait_for_retired_state_drop(&retirement_probe, retired_before);
+    }
+
+    #[test]
+    fn replace_state_retires_old_state_without_leaking_it() {
+        let vicaya_dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[package]\n").unwrap();
+
+        let state = Arc::new(RwLock::new(build_state(root.path(), vicaya_dir.path())));
+        let rebuilt = build_state(root.path(), vicaya_dir.path());
+        let retirement_probe = retirement_probe();
+        state.write().unwrap().retirement_probe = Some(Arc::clone(&retirement_probe));
+        let before = retirement_probe.load(std::sync::atomic::Ordering::SeqCst);
+
+        replace_state(&state, rebuilt);
+        wait_for_retired_state_drop(&retirement_probe, before);
     }
 
     #[test]
