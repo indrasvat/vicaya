@@ -9,6 +9,13 @@
 
 * **smriti:** preserve base ranking tie-breakers and quarantine corrupt usage stores
 
+## [1.5.1](https://github.com/indrasvat/vicaya/compare/v1.5.0...v1.5.1) (2026-05-30)
+
+
+### Bug Fixes
+
+* **daemon:** retire rebuilt index state ([#52](https://github.com/indrasvat/vicaya/issues/52)) ([8ce4480](https://github.com/indrasvat/vicaya/commit/8ce4480d433d79a119002277f9b9afb1e4895381))
+
 ## [1.5.0](https://github.com/indrasvat/vicaya/compare/v1.4.0...v1.5.0) (2026-05-27)
 
 
